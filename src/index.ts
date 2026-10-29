@@ -259,6 +259,19 @@ async function main(): Promise<void> {
     },
   );
 
+  server.registerTool("of_move_task",{
+    description:"Move an Action and its subtree under a project or action group ID. parentId null moves to Inbox. Appends to destination order. Projects cannot be moved with this tool.",
+    inputSchema:{id:z.string(),parentId:z.string().nullable()}
+  },async({id,parentId})=>{try{return jsonResult(summarizeTask(await service.moveTask(id,parentId)));}catch(e){return errorResult(e);}});
+  server.registerTool("of_set_task_status",{
+    description:"Drop or reactivate an individual Action. Reactivation clears its own completed/dropped dates; parent state and descendants are unchanged. Does not merge generated repeated instances.",
+    inputSchema:{id:z.string(),status:z.enum(["active","dropped"])}
+  },async({id,status})=>{try{return jsonResult(summarizeTask(await service.setTaskStatus(id,status)));}catch(e){return errorResult(e);}});
+  server.registerTool("of_set_group_order",{
+    description:"Set an action group or project's child execution order and optional complete-when-children-complete setting. Does not reorder existing children or complete them immediately.",
+    inputSchema:{id:z.string(),order:z.enum(["parallel","sequential"]),completedByChildren:z.boolean().optional()}
+  },async({id,order,completedByChildren})=>{try{return jsonResult(summarizeTask(await service.setGroupOrder(id,order,completedByChildren)));}catch(e){return errorResult(e);}});
+
   server.registerTool(
     "of_delete_task",
     {

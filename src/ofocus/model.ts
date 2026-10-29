@@ -16,6 +16,7 @@ export interface OFTask {
   projectStatus: string | null; // active|inactive|done|dropped
   inInbox: boolean;
   rank: number | null;
+  completedByChildren: boolean;
   order: string | null; // parallel|sequential
   droppedDate: string | null; // <hidden>
   repetitionRule: string | null;
@@ -66,6 +67,7 @@ export function newTask(id: string): OFTask {
     inInbox: false,
     rank: null,
     order: null,
+    completedByChildren: false,
     droppedDate: null,
     repetitionRule: null,
     repetitionMethod: null,

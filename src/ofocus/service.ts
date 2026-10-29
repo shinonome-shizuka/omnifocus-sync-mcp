@@ -1,3 +1,4 @@
+import { planTaskMove, planTaskStatus } from "./hierarchy.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -220,6 +221,39 @@ export class OmniFocusService {
       if(addIds.some(tag=>!result.tagIds.includes(tag)) || [...removeIds].some(tag=>result.tagIds.includes(tag))) throw new Error("Tag update verification failed");
       return {ok:true,id,tags:result.tagNames};
     } finally { await fs.rmdir(lock); }
+  }
+
+  async moveTask(id: string, parentId: string | null) {
+    this.assertWritable();
+    const {db} = await this.refresh();
+    const fields = planTaskMove(db,id,parentId);
+    await this.commit(buildUpdateTask(id,fields));
+    const fresh=(await this.refresh()).db;
+    const task=fresh.tasks.get(id);
+    if(!task || task.parentId!==parentId || task.inInbox!==(parentId===null)) throw new Error("Move not verified; read current state before retrying");
+    return fresh.view(task);
+  }
+
+  async setTaskStatus(id:string,status:"active"|"dropped") {
+    this.assertWritable();
+    const {db}=await this.refresh();
+    await this.commit(buildUpdateTask(id,planTaskStatus(db,id,status)));
+    const fresh=(await this.refresh()).db;
+    const task=fresh.tasks.get(id);
+    if(!task || (status==="active" ? !!task.completed || !!task.droppedDate : !task.droppedDate)) throw new Error("Status change not verified");
+    return fresh.view(task);
+  }
+
+  async setGroupOrder(id:string,order:"parallel"|"sequential",completedByChildren?:boolean) {
+    this.assertWritable();
+    const {db}=await this.refresh();
+    const task=db.tasks.get(id);
+    if(!task) throw new Error("Task or project not found");
+    await this.commit(buildUpdateTask(id,{order,completedByChildren,added:task.added}));
+    const fresh=(await this.refresh()).db;
+    const updated=fresh.tasks.get(id);
+    if(!updated || updated.order!==order || (completedByChildren!==undefined && updated.completedByChildren!==completedByChildren))throw new Error("Group settings not verified");
+    return fresh.view(updated);
   }
 
   async deleteTask(id: string): Promise<void> {

@@ -116,6 +116,12 @@ export interface UpdateTaskFields {
   planned?: Date | null;
   repetition?: RepetitionInput | null;
   completed?: Date | null;
+  dropped?: Date | null;
+  parentId?: string | null;
+  inInbox?: boolean;
+  rank?: number;
+  order?: "parallel" | "sequential";
+  completedByChildren?: boolean;
   estimatedMinutes?: number | null;
   /** Echo the object's existing <added> so a partial update doesn't clobber it. */
   added?: string | null;
@@ -139,6 +145,18 @@ export function buildUpdateTask(id: string, fields: UpdateTaskFields): string {
   if (fields.repetition !== undefined) lines.push(...repetitionElements(fields.repetition));
   if (fields.completed !== undefined)
     lines.push(fields.completed ? `  <completed>${utcIso(fields.completed)}</completed>` : "  <completed/>");
+  if (fields.dropped !== undefined) lines.push(fields.dropped ? `  <hidden>${utcIso(fields.dropped)}</hidden>` : "  <hidden/>");
+  if (fields.parentId !== undefined) lines.push(fields.parentId ? `  <task idref="${esc(fields.parentId)}"/>` : "  <task/>");
+  if (fields.inInbox !== undefined) lines.push(`  <inbox>${fields.inInbox}</inbox>`);
+  if (fields.rank !== undefined) {
+    if (!Number.isSafeInteger(fields.rank)) throw new Error("Rank must be a safe integer");
+    lines.push(`  <rank>${fields.rank}</rank>`);
+  }
+  if (fields.order !== undefined) {
+    if (!["parallel","sequential"].includes(fields.order)) throw new Error("Invalid group order");
+    lines.push(`  <order>${fields.order}</order>`);
+  }
+  if (fields.completedByChildren !== undefined) lines.push(`  <completed-by-children>${fields.completedByChildren}</completed-by-children>`);
   if (fields.estimatedMinutes !== undefined)
     lines.push(
       fields.estimatedMinutes != null

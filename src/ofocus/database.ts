@@ -112,6 +112,7 @@ export class Database {
     if (has(el, "flagged")) t.flagged = toBool(text(el.flagged)) ?? false;
     if (has(el, "estimated-minutes")) t.estimatedMinutes = toNum(text(el["estimated-minutes"]));
     if (has(el, "order")) t.order = orNull(text(el.order));
+    if (has(el, "completed-by-children")) t.completedByChildren = toBool(text(el["completed-by-children"])) ?? false;
     if (has(el, "rank")) t.rank = toNum(text(el.rank));
     if (has(el, "hidden")) t.droppedDate = orNull(text(el.hidden));
     if (has(el, "repetition-rule")) t.repetitionRule = orNull(text(el["repetition-rule"]));
