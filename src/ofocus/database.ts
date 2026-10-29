@@ -115,6 +115,10 @@ export class Database {
     if (has(el, "rank")) t.rank = toNum(text(el.rank));
     if (has(el, "hidden")) t.droppedDate = orNull(text(el.hidden));
     if (has(el, "repetition-rule")) t.repetitionRule = orNull(text(el["repetition-rule"]));
+    if (has(el, "repetition-method")) t.repetitionMethod = orNull(text(el["repetition-method"]));
+    if (has(el, "repetition-schedule-type")) t.repetitionScheduleType = orNull(text(el["repetition-schedule-type"]));
+    if (has(el, "repetition-anchor-date")) t.repetitionAnchorDate = orNull(text(el["repetition-anchor-date"]));
+    if (has(el, "catch-up-automatically")) t.catchUpAutomatically = toBool(text(el["catch-up-automatically"])) ?? false;
     if (has(el, "inbox")) t.inInbox = toBool(text(el.inbox)) ?? false;
     // Parent task reference: <task idref="..."/> (empty => top level).
     if (has(el, "task")) t.parentId = attr(el.task, "idref");
@@ -125,11 +129,13 @@ export class Database {
       const p = el.project;
       if (p && typeof p === "object") {
         t.isProject = true;
-        t.projectFolderId = attr((p as Record<string, unknown>).folder, "idref");
-        const status = has(p as Record<string, unknown>, "status")
-          ? text((p as Record<string, unknown>).status)
-          : t.projectStatus;
+        const po = p as Record<string, unknown>;
+        t.projectFolderId = attr(po.folder, "idref");
+        const status = has(po, "status") ? text(po.status) : t.projectStatus;
         t.projectStatus = orNull(status);
+        if (has(po, "next-review")) t.nextReview = orNull(text(po["next-review"]));
+        if (has(po, "last-review")) t.lastReview = orNull(text(po["last-review"]));
+        if (has(po, "review-interval")) t.reviewInterval = orNull(text(po["review-interval"]));
       } else {
         // Empty <project/> means "not a project".
         t.isProject = false;
@@ -206,6 +212,10 @@ export class Database {
       if (tid === taskId) ids.add(tagId);
     }
     return [...ids];
+  }
+
+  taskTagJoins(taskId: string): { id: string; tagId: string }[] {
+    return [...this.tagJoins].filter(([, value]) => value.taskId === taskId).map(([id, value]) => ({ id, tagId: value.tagId }));
   }
 
   folderPath(id: string | null): string | null {

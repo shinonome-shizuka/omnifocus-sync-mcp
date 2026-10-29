@@ -151,3 +151,23 @@ Not affiliated with or endorsed by The Omni Group. "OmniFocus" is their trademar
 ## License
 
 MIT — see [LICENSE](./LICENSE).
+
+## Agent lifecycle (AFK → 进行中 → PHV)
+
+`of_update_task_tags(id, add, remove)` applies tag deltas by existing tag ID/name, preserving unrelated tags. `of_list_tags` exposes the available names and IDs. `of_agent_transition(id, event, runId, reason)` handles the Agent workflow:
+
+- `start`: requires an active non-project Action tagged `AFK`; adds `进行中`, removes `PHV` and records the run owner.
+- `done`: removes `进行中`, adds `PHV`; reason records the delivered result and validation.
+- `needs_human`: same tags as done; reason records what the human must decide or provide.
+
+AFK and other tags remain. No lifecycle event completes the Action. A stable runId makes retries idempotent; another run cannot claim an Action already marked 进行中. Transition notes append to existing notes. Missing workflow tags 进行中/PHV are created in the same transaction. AFK must already exist on the Action.
+
+Accepted transitions are persisted in `~/.local/state/omnifocus-agent/pending` before sync writes and removed after verification. `scripts/agent-hook.mjs` retries these through MCP at Codex Stop / Hermes agent:end. It does not infer success from a stopped conversation. The Agent skill must explicitly call the semantic event. Pending events older than 24 hours are retained for manual inspection. A lock alongside the configured client state serializes lifecycle changes on this machine; it is not a cross-machine distributed lock. After a process crash, inspect a stale `.agent-lock` before removing it.
+
+Local installation includes `omnifocus-agent-workflow` skills for both hosts. Existing sessions/gateway processes must reload their MCP/Hook configuration before these integrations are available. The underlying sync store must be reachable and writable. This installation was tested with pure state transitions and MCP tool discovery; production state changes must be verified against a reachable sync server.
+
+## Repetition and planned dates
+
+`of_add_task` / `of_edit_task` accept `planned` and a structured `repetition` object. `of_edit_task` also supports `clearPlanned` and `repetition: null`. Recurrence validation does not expand infinite schedules. Task reads expose repetition method, schedule, anchor and catch-up alongside the rule.
+
+See [OmniFocus parity and remaining limitations](docs/omnifocus-parity.md). In particular, completing repeating items through sync is blocked until next-instance generation is supported; configure repetition through MCP and complete occurrences in OmniFocus for now.

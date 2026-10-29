@@ -19,6 +19,14 @@ export interface OFTask {
   order: string | null; // parallel|sequential
   droppedDate: string | null; // <hidden>
   repetitionRule: string | null;
+  repetitionMethod: string | null;
+  repetitionScheduleType: string | null;
+  repetitionAnchorDate: string | null;
+  catchUpAutomatically: boolean;
+  // Project review fields (children of <project>).
+  nextReview: string | null;
+  lastReview: string | null;
+  reviewInterval: string | null; // e.g. "@1w", "@2w", "~1m"
   primaryTagId: string | null;
   tagIds: string[];
 }
@@ -60,6 +68,13 @@ export function newTask(id: string): OFTask {
     order: null,
     droppedDate: null,
     repetitionRule: null,
+    repetitionMethod: null,
+    repetitionScheduleType: null,
+    repetitionAnchorDate: null,
+    catchUpAutomatically: false,
+    nextReview: null,
+    lastReview: null,
+    reviewInterval: null,
     primaryTagId: null,
     tagIds: [],
   };

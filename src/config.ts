@@ -11,6 +11,8 @@ export interface Config {
   clientName: string;
   clientStateFile: string;
   readOnly: boolean;
+  /** "digest" | "basic" | "auto" (default). auto picks from WWW-Authenticate. */
+  authScheme: "digest" | "basic" | "auto";
 }
 
 function required(name: string): string {
@@ -29,12 +31,19 @@ export function loadConfig(): Config {
     "",
   );
   const database = process.env.OMNIFOCUS_DATABASE ?? "OmniFocus.ofocus";
-  const ofocusUrl = `${syncBaseUrl}/${encodeURIComponent(username)}/${database}/`;
+  // Self-hosted WebDAV often stores the .ofocus package at a custom path
+  // (no /<username>/ segment). Point OMNIFOCUS_OFOCUS_URL at it directly.
+  const ofocusUrl = (
+    process.env.OMNIFOCUS_OFOCUS_URL ?? `${syncBaseUrl}/${encodeURIComponent(username)}/${database}/`
+  ).replace(/\/+$/, "") + "/";
   const clientName = process.env.OMNIFOCUS_CLIENT_NAME ?? `omnifocus-sync-mcp@${os.hostname()}`;
   const clientStateFile =
     process.env.OMNIFOCUS_CLIENT_STATE_FILE ??
     path.join(os.homedir(), ".config", "omnifocus-sync-mcp", "client.json");
   const readOnly = /^(1|true|yes)$/i.test(process.env.OMNIFOCUS_READ_ONLY ?? "");
+  const authSchemeRaw = (process.env.OMNIFOCUS_SYNC_AUTH ?? "auto").toLowerCase();
+  const authScheme: "digest" | "basic" | "auto" =
+    authSchemeRaw === "digest" || authSchemeRaw === "basic" ? authSchemeRaw : "auto";
   return {
     username,
     password,
@@ -45,5 +54,6 @@ export function loadConfig(): Config {
     clientName,
     clientStateFile,
     readOnly,
+    authScheme,
   };
 }

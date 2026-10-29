@@ -36,6 +36,7 @@
     "fast-xml-parser": "^4.5.0",
     "fflate": "^0.8.2",
     "plist": "^3.1.0",
+    "rrule": "^2.8.1",
     "zod": "^3.25.0"
   },
   "devDependencies": {

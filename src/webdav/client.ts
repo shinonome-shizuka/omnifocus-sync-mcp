@@ -16,18 +16,24 @@ export interface WebDavOptions {
   password: string;
   userAgent?: string;
   maxRedirects?: number;
+  /** Auth scheme: "digest" (original behavior), "basic", or "auto" (default:
+   *  picks Basic or Digest from the server's WWW-Authenticate challenge). */
+  authScheme?: "digest" | "basic" | "auto";
 }
 
 /**
  * Minimal WebDAV client for Omni Sync Server: HTTP Digest auth, transparent
  * shard-redirect following (sync.omnigroup.com -> syncN.omnigroup.com), and the
- * verbs OmniFocus sync needs.
+ * verbs OmniFocus sync needs. Also supports HTTP Basic auth for self-hosted
+ * WebDAV endpoints (e.g. nginx with auth_basic).
  */
 export class WebDavClient {
   private readonly username: string;
   private readonly password: string;
   private readonly userAgent: string;
   private readonly maxRedirects: number;
+  private readonly authScheme: "digest" | "basic" | "auto";
+  private readonly basicOrigins = new Set<string>();
   private readonly challenges = new Map<string, ReturnType<typeof parseDigestChallenge>>();
   private readonly nc = new Map<string, number>();
   private readonly xml = new XMLParser({
@@ -41,6 +47,7 @@ export class WebDavClient {
     this.password = opts.password;
     this.userAgent = opts.userAgent ?? "omnifocus-sync-mcp/0.1 (WebDAV)";
     this.maxRedirects = opts.maxRedirects ?? 5;
+    this.authScheme = opts.authScheme ?? "auto";
   }
 
   private nextNc(origin: string): number {
@@ -50,6 +57,11 @@ export class WebDavClient {
   }
 
   private authHeader(method: string, url: URL): string | undefined {
+    if (this.authScheme === "basic" || this.basicOrigins.has(url.origin)) {
+      return (
+        "Basic " + Buffer.from(`${this.username}:${this.password}`).toString("base64")
+      );
+    }
     const challenge = this.challenges.get(url.origin);
     if (!challenge) return undefined;
     return buildDigestAuth({
@@ -98,9 +110,14 @@ export class WebDavClient {
         continue;
       }
 
-      // Handle digest auth challenge.
+      // Handle auth challenges (Basic or Digest).
       if (res.status === 401) {
-        const wwwAuth = res.headers.get("www-authenticate");
+        const wwwAuth = res.headers.get("www-authenticate") ?? "";
+        if (/^\s*basic/i.test(wwwAuth) && !triedAuth && this.authScheme !== "digest") {
+          this.basicOrigins.add(url.origin);
+          triedAuth = true;
+          continue;
+        }
         const challenge = wwwAuth ? parseDigestChallenge(wwwAuth) : null;
         if (challenge && !triedAuth) {
           this.challenges.set(url.origin, challenge);

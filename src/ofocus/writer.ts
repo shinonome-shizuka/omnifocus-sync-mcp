@@ -1,3 +1,4 @@
+import { repetitionElements, RepetitionInput } from "./repetition.js";
 import crypto from "node:crypto";
 import plist from "plist";
 import { createId } from "../crypto/index.js";
@@ -48,11 +49,33 @@ export interface AddTaskInput {
   flagged?: boolean;
   due?: Date;
   defer?: Date;
+  planned?: Date;
+  repetition?: RepetitionInput | null;
   /** Parent project or task id. If omitted, the task goes to the inbox. */
   parentId?: string;
   /** Primary tag id. */
   tagId?: string;
   estimatedMinutes?: number;
+}
+
+/** Build a create transaction for a project in a folder. Returns the xml and new id. */
+export function buildAddProject(name: string, folderId: string | null, note?: string): { xml: string; id: string } {
+  const id = createId();
+  const now = utcIso();
+  const lines: string[] = [`<task id="${id}\">`];
+  lines.push("  <project>");
+  if (folderId) lines.push(`    <folder idref="${folderId}"/>`);
+  lines.push("    <singleton>false</singleton>");
+  lines.push("    <status>active</status>");
+  lines.push(`    <review-interval>@1w</review-interval>`);
+  lines.push("  </project>");
+  lines.push(`  <added>${now}</added>`);
+  lines.push(`  <modified>${now}</modified>`);
+  lines.push(`  <name>${esc(name)}</name>`);
+  if (note) lines.push(`  <note>${esc(note)}</note>`);
+  lines.push(`  <rank>${newRank()}</rank>`);
+  lines.push("</task>");
+  return { xml: wrap([lines.join("\n  ")]), id };
 }
 
 /** Build a create transaction for a single task. Returns the xml and new id. */
@@ -73,6 +96,8 @@ export function buildAddTask(input: AddTaskInput): { xml: string; id: string } {
   if (input.flagged) lines.push("  <flagged>true</flagged>");
   if (input.due) lines.push(`  <due>${floatingLocal(input.due)}</due>`);
   if (input.defer) lines.push(`  <start>${floatingLocal(input.defer)}</start>`);
+  if (input.planned) lines.push(`  <planned>${floatingLocal(input.planned)}</planned>`);
+  if (input.repetition !== undefined) lines.push(...repetitionElements(input.repetition));
   if (input.tagId) lines.push(`  <context idref="${input.tagId}"/>`);
   if (input.estimatedMinutes != null)
     lines.push(`  <estimated-minutes>${input.estimatedMinutes}</estimated-minutes>`);
@@ -88,6 +113,8 @@ export interface UpdateTaskFields {
   flagged?: boolean;
   due?: Date | null;
   defer?: Date | null;
+  planned?: Date | null;
+  repetition?: RepetitionInput | null;
   completed?: Date | null;
   estimatedMinutes?: number | null;
   /** Echo the object's existing <added> so a partial update doesn't clobber it. */
@@ -108,6 +135,8 @@ export function buildUpdateTask(id: string, fields: UpdateTaskFields): string {
     lines.push(fields.due ? `  <due>${floatingLocal(fields.due)}</due>` : "  <due/>");
   if (fields.defer !== undefined)
     lines.push(fields.defer ? `  <start>${floatingLocal(fields.defer)}</start>` : "  <start/>");
+  if (fields.planned !== undefined) lines.push(fields.planned ? `  <planned>${floatingLocal(fields.planned)}</planned>` : "  <planned/>");
+  if (fields.repetition !== undefined) lines.push(...repetitionElements(fields.repetition));
   if (fields.completed !== undefined)
     lines.push(fields.completed ? `  <completed>${utcIso(fields.completed)}</completed>` : "  <completed/>");
   if (fields.estimatedMinutes !== undefined)
@@ -123,6 +152,44 @@ export function buildUpdateTask(id: string, fields: UpdateTaskFields): string {
 /** Build an op="delete" transaction removing an object by id. */
 export function buildDeleteTask(id: string): string {
   return wrap([`<task id="${id}" op="delete"/>`]);
+}
+
+export interface ProjectReviewFields {
+  nextReview?: Date | null;
+  lastReview?: Date | null;
+  reviewInterval?: string | null; // "@1w" | "@2w" | "~1m" ...
+}
+
+/**
+ * Build an op="update" transaction touching only a project's review fields.
+ * Echoes folder idref + status so the partial <project> body doesn't clear them.
+ */
+export function buildUpdateProjectReview(
+  id: string,
+  folderId: string | null,
+  status: string | null,
+  fields: ProjectReviewFields,
+): string {
+  const lines: string[] = [`<task id="${id}" op="update">`, "  <project>"];
+  if (folderId) lines.push(`    <folder idref="${folderId}"/>`);
+  if (status) lines.push(`    <status>${esc(status)}</status>`);
+  if (fields.lastReview !== undefined)
+    lines.push(fields.lastReview ? `    <last-review>${fields.lastReview.toISOString()}</last-review>` : "    <last-review/>");
+  if (fields.nextReview !== undefined)
+    lines.push(fields.nextReview ? `    <next-review>${fields.nextReview.toISOString()}</next-review>` : "    <next-review/>");
+  if (fields.reviewInterval !== undefined)
+    lines.push(fields.reviewInterval ? `    <review-interval>${esc(fields.reviewInterval)}</review-interval>` : "    <review-interval/>");
+  lines.push("  </project>", "</task>");
+  return wrap([lines.join("\n  ")]);
+}
+
+/** Build one transaction updating review fields on many projects. */
+export function buildBatchProjectReview(
+  updates: { id: string; folderId: string | null; status: string | null; fields: ProjectReviewFields }[],
+): string {
+  return wrap(
+    updates.map((u) => buildUpdateProjectReview(u.id, u.folderId, u.status, u.fields).replace(/^<\?xml[^>]*>\n<omnifocus[^>]*>\n|\n<\/omnifocus>\n$/g, "")),
+  );
 }
 
 export interface ClientInfo {
@@ -160,4 +227,21 @@ export function buildClientPlist(info: ClientInfo): string {
     tailIdentifiers: info.tailIdentifiers,
   };
   return plist.build(dict as unknown as plist.PlistValue);
+}
+
+/** Delta tag edits: preserve unrelated joins and all unrelated task fields. */
+export function buildTaskTagPatch(id: string, input: {
+  addIds: string[]; removeJoinIds: string[]; clearPrimary: boolean;
+  added?: string | null; note?: string; createTags?: {id: string; name: string}[];
+}): string {
+  const task = [`<task id="${esc(id)}" op="update">`, `<modified>${utcIso()}</modified>`];
+  if(input.added) task.push(`<added>${esc(input.added)}</added>`);
+  if(input.clearPrimary) task.push('<context/>');
+  if(input.note !== undefined) task.push(`<note>${esc(input.note)}</note>`);
+  task.push('</task>');
+  const elements = (input.createTags ?? []).map(t=>`<context id="${esc(t.id)}"><name>${esc(t.name)}</name></context>`);
+  elements.push(task.join(''));
+  for(const join of input.removeJoinIds) elements.push(`<task-to-tag id="${esc(join)}" op="delete"/>`);
+  for(const tag of input.addIds) elements.push(`<task-to-tag id="${esc(id + '.' + tag)}"><task idref="${esc(id)}"/><context idref="${esc(tag)}"/></task-to-tag>`);
+  return wrap(elements);
 }
