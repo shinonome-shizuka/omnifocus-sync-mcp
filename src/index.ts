@@ -281,13 +281,12 @@ async function main(): Promise<void> {
     "of_delete_task",
     {
       title: "Delete an OmniFocus task",
-      description: "Permanently delete a task by id (writes an op=delete transaction).",
-      inputSchema: { id: z.string() },
+      description: "Delete a leaf task or empty project. Refuses any remaining children, including completed/dropped items. Use dryRun to inspect blockers without writing.",
+      inputSchema: { id: z.string(), dryRun: z.boolean().default(false) },
     },
-    async ({ id }) => {
+    async ({ id, dryRun }) => {
       try {
-        await service.deleteTask(id);
-        return jsonResult({ ok: true, id, deleted: true });
+        return jsonResult({ ok: true, ...await service.deleteTask(id, dryRun) });
       } catch (e) {
         return errorResult(e);
       }

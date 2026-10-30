@@ -1,3 +1,4 @@
+import { validateTransactionXml } from "./transaction-validation.js";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import { WebDavClient } from "../webdav/client.js";
 import {
@@ -144,6 +145,7 @@ export class OmniFocusStore {
     contentsXml: string,
     parents: string[],
   ): Promise<{ name: string; tail: string }> {
+    validateTransactionXml(contentsXml);
     const tail = createId();
     const chain = [...parents, tail].join("+");
     const name = `${utcStamp()}=${chain}.zip`;

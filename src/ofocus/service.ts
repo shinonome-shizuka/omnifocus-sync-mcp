@@ -1,3 +1,4 @@
+import { inspectTaskDeletion } from "./deletion.js";
 import {planCatalog, CatalogInput} from "./catalog.js";
 import {buildAddProject} from "./writer.js";
 import { planTaskMove, planTaskStatus } from "./hierarchy.js";
@@ -274,11 +275,16 @@ export class OmniFocusService {
     return fresh.view(updated);
   }
 
-  async deleteTask(id: string): Promise<void> {
+  async deleteTask(id: string, dryRun = false) {
     this.assertWritable();
-    const loaded = await this.loaded();
-    if (!loaded.db.tasks.get(id)) throw new Error(`No task with id ${id}`);
+    const { db } = await this.refresh();
+    const plan = inspectTaskDeletion(db, id);
+    if (dryRun) return { ...plan, deleted: false, dryRun: true };
+    if (!plan.canDelete) throw new Error(`Cannot delete ${id}: ${plan.children.length} child items remain. Move or delete them explicitly first; use dryRun to inspect.`);
     await this.commit(buildDeleteTask(id));
+    const fresh = (await this.refresh()).db;
+    if (fresh.tasks.has(id)) throw new Error("Deletion not verified; read current state before retrying");
+    return { ...plan, deleted: true, dryRun: false };
   }
 
   /** Set review fields on a single project. */

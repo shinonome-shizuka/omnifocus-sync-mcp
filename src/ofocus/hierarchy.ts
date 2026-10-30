@@ -11,6 +11,7 @@ export function planTaskMove(db:Database,id:string,parentId:string|null):UpdateT
    if(seen.has(parent.id))throw new Error('Move would create or enter a hierarchy cycle');
    seen.add(parent.id);
    if(db.view(parent).status!=='active' || parent.projectStatus==='inactive')throw new Error('Destination or its ancestor is inactive');
+   if (parent.parentId && !db.tasks.has(parent.parentId)) throw new Error("Destination has a missing ancestor; repair its hierarchy first");
    parent=parent.parentId?db.tasks.get(parent.parentId):undefined;
   }
  }
