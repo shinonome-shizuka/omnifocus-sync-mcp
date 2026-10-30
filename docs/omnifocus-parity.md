@@ -56,3 +56,9 @@ Every transaction through `OmniFocusStore.writeTransaction` is validated before 
 `of_delete_task` accepts `dryRun` (default false). A dry run refreshes the database and returns `canDelete`, direct child IDs/names, and `deleted: false`, without uploading. Actual deletion rejects any children, including completed and dropped children, refreshes before checking, and reads back to verify deletion. Move or delete children explicitly first. This also permits deleting an empty project. No automatic recursive deletion is performed.
 
 Task moves reject destinations whose ancestor is missing, in addition to the existing cycle and inactive-ancestor checks. Deletion inspection scans the task map once (O(n)); regression coverage includes 10,000 children. Offline tests verify blocked writes and unchanged valid ZIP contents. Simultaneous writes by other sync clients are not made atomic by these checks.
+
+## Conditional tags and agent hooks
+
+Leading emoji on workflow tags are ignored for matching; ambiguous normalized names are rejected. Agent start adds 等待 and 进行中; completion/handoff leaves 等待 unchanged (additive rule). Explicit tag editing also adds the existing unique 等待 tag when resulting tags contain AFK and 进行中. Removing 等待 while both conditions remain is rejected.
+
+The Codex context hook reminds the model at SessionStart/UserPromptSubmit to bind authorized work to an exact Action ID and call lifecycle tools. The Stop hook only retries explicit pending transitions; it does not infer completion. Hook scripts record last invocation timestamps locally. Configuration/trust approval and a new host event are required to verify real host execution; manually executing a hook is only a script smoke test. Hermes uses the installed workflow skill and SOUL instruction, with its existing agent:end retry hook.

@@ -6,6 +6,8 @@ import {fileURLToPath} from 'node:url';
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
 const directory=path.join(os.homedir(),'.local/state/omnifocus-agent/pending');
+await fs.mkdir(path.dirname(directory),{recursive:true,mode:0o700});
+await fs.writeFile(path.join(path.dirname(directory),'last-stop-hook.json'),JSON.stringify({at:new Date().toISOString(),event:'retry'}),{mode:0o600});
 const files=(await fs.readdir(directory).catch(()=>[])).filter(n=>n.endsWith('.json'));
 if(files.length){
  const client=new Client({name:'omnifocus-agent-hook',version:'1.0.0'});

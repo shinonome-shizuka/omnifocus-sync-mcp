@@ -29,3 +29,6 @@ The server saves accepted transitions before writing to sync. Codex Stop and Her
 If the tool reports failure, do not claim tags were changed. Retry the same event/runId after checking the task. Do not issue a different outcome just to clear an error. The workflow uses a local lock shared by the two hosts; it is not a distributed lease across other machines. Stale locks after a crash require inspection before removal.
 
 For this AFK Action, keep handoffs on the original Action rather than creating a duplicate Inbox task through the older omnifocus-followup skill. Unrelated follow-up actions retain their existing workflow.
+
+## Conditional tags
+Workflow names accept leading emoji (for example 🤖 AFK, 🛫 进行中, ⏸️ 等待). Start adds 等待 along with 进行中. The rule is additive: done/needs_human does not remove 等待. Do not create plain-name duplicates of existing emoji tags.

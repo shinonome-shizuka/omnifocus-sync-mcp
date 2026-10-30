@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { buildTaskTagPatch } from "./writer.js";
-import { planAgentTransition } from "./agentWorkflow.js";
+import { planAgentTransition, workflowTagName } from "./agentWorkflow.js";
 import { Config } from "../config.js";
 import { WebDavClient } from "../webdav/client.js";
 import { Database } from "./database.js";
@@ -211,8 +211,8 @@ export class OmniFocusService {
       const verified = (await this.refresh()).db;
       const task = verified.tasks.get(input.id);
       if(!task) throw new Error("Task disappeared during verification");
-      const tags = verified.view(task).tagNames;
-      const valid = input.event === "start" ? tags.includes("进行中") && !tags.includes("PHV") : tags.includes("PHV") && !tags.includes("进行中");
+      const tags = verified.view(task).tagNames.map(workflowTagName);
+      const valid = input.event === "start" ? tags.includes("进行中") && tags.includes("等待") && !tags.includes("PHV") : tags.includes("PHV") && !tags.includes("进行中");
       if(!valid) throw new Error("Sync write not yet verified; retry with the same runId/event");
       await fs.unlink(pendingFile);
       return {ok:true,id:input.id,event:input.event,tags,completed:!!task.completed};
@@ -231,6 +231,14 @@ export class OmniFocusService {
       const removeIds = new Set(await Promise.all(remove.map(t=>this.resolveTagId(t))));
       if(addIds.some(id=>removeIds.has(id))) throw new Error("Cannot add and remove the same tag");
       const current = new Set(db.view(task).tagIds);
+      const resulting = new Set([...current].filter(tag=>!removeIds.has(tag)).concat(addIds));
+      const names = new Set([...resulting].map(tag=>workflowTagName(db.tags.get(tag)?.name??'')));
+      if(names.has('AFK') && names.has('进行中')) {
+        const waiting=[...db.tags.values()].filter(tag=>workflowTagName(tag.name)==='等待');
+        if(waiting.length!==1) throw new Error('Conditional tag rule requires exactly one 等待 tag');
+        if(removeIds.has(waiting[0].id)) throw new Error('AFK + 进行中 requires 等待; remove a condition tag first');
+        if(!addIds.includes(waiting[0].id)) addIds.push(waiting[0].id);
+      }
       const removeJoinIds = db.taskTagJoins(id).filter(j=>removeIds.has(j.tagId)).map(j=>j.id);
       const clearPrimary = !!task.primaryTagId && removeIds.has(task.primaryTagId);
       const missing = [...new Set(addIds)].filter(tag=>!current.has(tag));
