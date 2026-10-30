@@ -16,7 +16,7 @@ export function planCatalog(db:Database,input:CatalogInput){
  }
  if(input.operation==='delete'){
   if([...map.values()].some(x=>x.parentId===id))throw Error('Move children before deleting');
-  const used=[...db.tasks.values()].some(t=>input.kind==='folder'?t.projectFolderId===id:db.tagIdsForTask(t.id,t.primaryTagId).includes(id));
+  const used=[...db.tasks.values()].some(t=>input.kind==='folder'?t.projectFolderId===id:db.view(t).tagIds.includes(id));
   if(used)throw Error('Object is in use; remove references before deleting');
  }
  const body:string[]=[];
