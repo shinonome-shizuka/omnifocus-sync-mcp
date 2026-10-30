@@ -1,3 +1,5 @@
+import {planCatalog, CatalogInput} from "./catalog.js";
+import {buildAddProject} from "./writer.js";
 import { planTaskMove, planTaskStatus } from "./hierarchy.js";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -136,6 +138,22 @@ export class OmniFocusService {
     this.cache = null;
   }
 
+  async manageCatalog(input:CatalogInput){
+    this.assertWritable();const {db}=await this.refresh();const plan=planCatalog(db,input);
+    await this.commit(plan.xml);const fresh=(await this.refresh()).db;
+    const object=(input.kind==='folder'?fresh.folders:fresh.tags).get(plan.id);
+    if(input.operation==='delete'){if(object)throw Error('Deletion not verified');return {id:plan.id,deleted:true};}
+    if(!object || (input.name!==undefined&&object.name!==input.name.trim()) || (input.parentId!==undefined&&object.parentId!==input.parentId))throw Error('Catalog write not verified');
+    return object;
+  }
+  async createProject(name:string,folderId:string|null,note?:string){
+    this.assertWritable();const {db}=await this.refresh();
+    if(!name.trim())throw Error('Name required');if(folderId&&!db.folders.has(folderId))throw Error('Folder not found');
+    const plan=buildAddProject(name.trim(),folderId,note);await this.commit(plan.xml);
+    const fresh=(await this.refresh()).db;const project=fresh.tasks.get(plan.id);
+    if(!project?.isProject||project.name!==name.trim())throw Error('Project creation not verified');
+    return fresh.view(project);
+  }
   async addTask(
     input: AddTaskInput & { projectNameOrId?: string; tagNameOrId?: string },
   ): Promise<{ id: string }> {

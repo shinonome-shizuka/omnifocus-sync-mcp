@@ -149,6 +149,11 @@ async function main(): Promise<void> {
     },
   );
 
+  server.registerTool("of_list_folders",{description:"List folders with IDs, parent IDs and full paths",inputSchema:{}},async()=>{try{const db=await service.db();return jsonResult({folders:[...db.folders.values()].map(f=>({...f,path:db.folderPath(f.id)}))});}catch(e){return errorResult(e);}});
+  server.registerTool("of_manage_folder",{description:"Create, rename, move or delete an empty folder. Reject cycles and referenced deletes.",inputSchema:{operation:z.enum(["create","update","delete"]),id:z.string().optional(),name:z.string().min(1).optional(),parentId:z.string().nullable().optional()}},async args=>{try{return jsonResult(await service.manageCatalog({...args,kind:"folder"}));}catch(e){return errorResult(e);}});
+  server.registerTool("of_manage_tag",{description:"Create, rename, reparent or delete an unused tag. Reject cycles and referenced deletes.",inputSchema:{operation:z.enum(["create","update","delete"]),id:z.string().optional(),name:z.string().min(1).optional(),parentId:z.string().nullable().optional()}},async args=>{try{return jsonResult(await service.manageCatalog({...args,kind:"tag"}));}catch(e){return errorResult(e);}});
+  server.registerTool("of_create_project",{description:"Create an active project, optionally inside a folder",inputSchema:{name:z.string().min(1),folderId:z.string().nullable().default(null),note:z.string().optional()}},async args=>{try{return jsonResult(await service.createProject(args.name,args.folderId,args.note));}catch(e){return errorResult(e);}});
+
   server.registerTool("of_list_tags", {
     description:"List tag IDs and names",inputSchema:{}
   },async()=>{try{return jsonResult({tags:[...(await service.db()).tags.values()]});}catch(e){return errorResult(e);}});

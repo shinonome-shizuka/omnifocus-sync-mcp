@@ -7,9 +7,9 @@ This fork is not full OmniFocus parity. This document separates implemented fiel
 | Actions | Read, create, edit, move subtrees, Inbox moves, drop/reactivate, complete non-repeating actions, delete | Arbitrary sibling reorder, complete action groups with native semantics |
 | Dates | Due, defer and planned read/create/edit/clear | Explicit floating-time/time-zone preservation across host zones |
 | Repetition | RRULE, fixed/defer-after-completion/due-after-completion, due/defer/planned anchor for fixed schedules, catch-up, clear; applies to existing project root tasks too | Next-instance generation, skip occurrence, modern planned-after-completion semantics and native app end-to-end validation |
-| Tags | List and add/remove existing tags without replacing unrelated tags | General tag CRUD, exclusive groups and location behavior |
-| Projects | List, edit existing task-backed fields, review scheduling | Exposed creation/deletion/status/type/move APIs and full project lifecycle |
-| Folders | Internal parsing | Public CRUD and hierarchy operations |
+| Tags | List, create/rename/reparent, delete unused tags, add/remove existing tags without replacing unrelated tags | Tag status, exclusive groups and location behavior |
+| Projects | List, create, edit existing task-backed fields, review scheduling | Deletion/status/type/move APIs and full project lifecycle |
+| Folders | List paths, create/rename/reparent, delete empty folders | Native app validation |
 | Agent workflow | AFK -> 进行中 -> PHV, ownership, handoff notes, durable MCP retries | Distributed cross-machine ownership |
 | Perspectives | Not exposed | Query rules and saved perspectives |
 | Attachments / notifications | Not exposed | Storage, metadata, delivery semantics |
@@ -43,3 +43,7 @@ Field vocabulary was checked against locally generated OmniFocus XML without pub
 - `of_set_group_order(id, order, completedByChildren?)`: set parallel/sequential execution and optional complete-by-children. Does not manually rearrange children or mark the group completed immediately.
 
 These APIs reload before planning and verify the written values by reading the sync database again. Tests cover planner and XML parser/builder behavior; native app end-to-end writes remain unverified while sync connectivity is unreliable.
+
+## Catalog management
+
+of_manage_folder and of_manage_tag accept operation create/update/delete. Updates preserve omitted fields; parentId null moves to root. Deletion rejects children and references, including task-to-tag joins. of_create_project creates an active project. All new writes refresh before planning and verify after commit. Live mutation validation remains outstanding; these additions do not constitute full native feature parity.
