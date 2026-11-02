@@ -1,0 +1,2 @@
+import {input,sessionId,update,guard} from './session-state.mjs';
+try{const p=await input();const id=sessionId(p);if(!id)console.log(JSON.stringify({systemMessage:'OmniFocus: no session ID supplied; lifecycle could not be verified.'}));else console.log(JSON.stringify(await update(id,s=>{const result=guard(s,p);s.lastStop={at:new Date().toISOString(),blocked:!!result.decision,unresolved:!!(result.decision||result.systemMessage)};return result;})));}catch(e){console.log(JSON.stringify({systemMessage:'OmniFocus guard failed: '+e.message}));}

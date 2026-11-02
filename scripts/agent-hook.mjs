@@ -21,7 +21,9 @@ if(files.length){
    if(Date.now()-Date.parse(item.requestedAt)>24*3600*1000){failures++;continue;}
    const {id,event,runId,reason}=item;
    const result=await client.callTool({name:'of_agent_transition',arguments:{id,event,runId,...(reason?{reason}:{})}},undefined,{timeout:90000});
-   if(result.isError)failures++;
+   const body=result.content?.find(c=>c.type==='text');let response;try{response=JSON.parse(body?.text||'{}');}catch{}
+   if(result.isError||response?.ok!==true)failures++;
+   else await fs.unlink(path.join(directory,filename)).catch(e=>{if(e.code!=='ENOENT')throw e;});
   }
  }catch{failures++;}finally{await client.close();}
  if(failures){console.error(`[omnifocus-agent] ${failures} pending transition(s) require retry or review; originals retained.`);process.exitCode=1;}

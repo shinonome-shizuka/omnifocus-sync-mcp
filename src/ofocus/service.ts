@@ -52,7 +52,7 @@ export class OmniFocusService {
 
   private async init(): Promise<void> {
     if (this.initialized) return;
-    const listing = await this.store.list();
+    const listing = await this.store.listResilient();
     if (listing.encrypted) {
       await this.store.unlock(this.config.passphrase);
     }
@@ -200,7 +200,20 @@ export class OmniFocusService {
     await fs.mkdir(lock);
     try {
       const {db} = await this.refresh();
-      const plan = planAgentTransition(db, input);
+      const ownershipDir = path.join(os.homedir(), ".local/state/omnifocus-agent/ownership");
+      await fs.mkdir(ownershipDir,{recursive:true,mode:0o700});
+      const ownerKey=crypto.createHash("sha256").update(this.config.clientStateFile+":"+input.id).digest("hex");
+      const ownerFile=path.join(ownershipDir,ownerKey+".json");
+      let ledger: {latest?: {runId:string;event:"start"|"done"|"needs_human"}; events: unknown[]} = {events:[]};
+      try { ledger=JSON.parse(await fs.readFile(ownerFile,"utf8")); } catch(e) { if((e as NodeJS.ErrnoException).code!=="ENOENT") throw e; }
+      const plan = planAgentTransition(db, input, ledger.latest);
+      // Persist intent before remote write: a lost response can safely retry the same run/event.
+      if(ledger.latest?.runId!==input.runId || ledger.latest?.event!==input.event){
+        ledger.latest={runId:input.runId,event:input.event};
+        ledger.events.push({...input,at:new Date().toISOString()});
+        const ownerTemp=ownerFile+"."+process.pid+".tmp";
+        await fs.writeFile(ownerTemp,JSON.stringify(ledger),{mode:0o600});await fs.rename(ownerTemp,ownerFile);
+      }
       const pendingDir = path.join(os.homedir(), ".local/state/omnifocus-agent/pending");
       await fs.mkdir(pendingDir,{recursive:true,mode:0o700});
       const pendingFile = path.join(pendingDir,crypto.createHash("sha256").update(input.id).digest("hex")+".json");
@@ -212,7 +225,7 @@ export class OmniFocusService {
       const task = verified.tasks.get(input.id);
       if(!task) throw new Error("Task disappeared during verification");
       const tags = verified.view(task).tagNames.map(workflowTagName);
-      const valid = input.event === "start" ? tags.includes("进行中") && tags.includes("等待") && !tags.includes("PHV") : tags.includes("PHV") && !tags.includes("进行中");
+      const valid = input.event === "start" ? tags.includes("进行中") && !tags.includes("HITL") : tags.includes("HITL") && !tags.includes("进行中");
       if(!valid) throw new Error("Sync write not yet verified; retry with the same runId/event");
       await fs.unlink(pendingFile);
       return {ok:true,id:input.id,event:input.event,tags,completed:!!task.completed};
@@ -231,14 +244,6 @@ export class OmniFocusService {
       const removeIds = new Set(await Promise.all(remove.map(t=>this.resolveTagId(t))));
       if(addIds.some(id=>removeIds.has(id))) throw new Error("Cannot add and remove the same tag");
       const current = new Set(db.view(task).tagIds);
-      const resulting = new Set([...current].filter(tag=>!removeIds.has(tag)).concat(addIds));
-      const names = new Set([...resulting].map(tag=>workflowTagName(db.tags.get(tag)?.name??'')));
-      if(names.has('AFK') && names.has('进行中')) {
-        const waiting=[...db.tags.values()].filter(tag=>workflowTagName(tag.name)==='等待');
-        if(waiting.length!==1) throw new Error('Conditional tag rule requires exactly one 等待 tag');
-        if(removeIds.has(waiting[0].id)) throw new Error('AFK + 进行中 requires 等待; remove a condition tag first');
-        if(!addIds.includes(waiting[0].id)) addIds.push(waiting[0].id);
-      }
       const removeJoinIds = db.taskTagJoins(id).filter(j=>removeIds.has(j.tagId)).map(j=>j.id);
       const clearPrimary = !!task.primaryTagId && removeIds.has(task.primaryTagId);
       const missing = [...new Set(addIds)].filter(tag=>!current.has(tag));
@@ -261,9 +266,11 @@ export class OmniFocusService {
     return fresh.view(task);
   }
 
-  async setTaskStatus(id:string,status:"active"|"dropped") {
+  async setTaskStatus(id:string,status:"active"|"dropped",allOccurrences=false) {
     this.assertWritable();
     const {db}=await this.refresh();
+    if(status==='active'&&allOccurrences)throw Error('allOccurrences only applies to dropping');
+    if(status==='dropped'&&!allOccurrences){let candidate=db.tasks.get(id);const seen=new Set<string>();while(candidate){if(seen.has(candidate.id))throw Error('Cyclic hierarchy');seen.add(candidate.id);if(candidate.repetitionRule)throw Error('Remote single-occurrence drop is unsupported; use local backend. No changes written.');candidate=candidate.parentId?db.tasks.get(candidate.parentId):undefined;}}
     await this.commit(buildUpdateTask(id,planTaskStatus(db,id,status)));
     const fresh=(await this.refresh()).db;
     const task=fresh.tasks.get(id);

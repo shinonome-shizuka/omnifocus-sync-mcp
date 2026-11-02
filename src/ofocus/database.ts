@@ -266,4 +266,27 @@ export class Database {
   allTaskViews(): TaskView[] {
     return [...this.tasks.values()].map((t) => this.view(t));
   }
+
+  /** Serialize all maps to a plain JSON object (snapshot cache). */
+  toJSON(): Record<string, unknown> {
+    return {
+      tasks: [...this.tasks.entries()],
+      folders: [...this.folders.entries()],
+      tags: [...this.tags.entries()],
+      settings: [...this.settings.entries()],
+      tagJoins: [...(this.tagJoins as any).entries()],
+    };
+  }
+
+  /** Restore maps from a snapshot created by toJSON(). */
+  static fromJSON(data: Record<string, unknown>): Database {
+    const db = new Database();
+    for (const [k, v] of data.tasks as [string, OFTask][]) db.tasks.set(k, v);
+    for (const [k, v] of data.folders as [string, OFFolder][]) db.folders.set(k, v);
+    for (const [k, v] of data.tags as [string, OFTag][]) db.tags.set(k, v);
+    for (const [k, v] of data.settings as [string, string][]) db.settings.set(k, v);
+    for (const [k, v] of data.tagJoins as [string, { taskId: string; tagId: string }][])
+      (db.tagJoins as any).set(k, v);
+    return db;
+  }
 }

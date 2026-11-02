@@ -152,15 +152,15 @@ Not affiliated with or endorsed by The Omni Group. "OmniFocus" is their trademar
 
 MIT — see [LICENSE](./LICENSE).
 
-## Agent lifecycle (AFK → 进行中 → PHV)
+## Agent lifecycle (AFK → 进行中 → HITL)
 
 `of_update_task_tags(id, add, remove)` applies tag deltas by existing tag ID/name, preserving unrelated tags. `of_list_tags` exposes the available names and IDs. `of_agent_transition(id, event, runId, reason)` handles the Agent workflow:
 
-- `start`: requires an active non-project Action tagged `AFK`; adds `进行中`, removes `PHV` and records the run owner.
-- `done`: removes `进行中`, adds `PHV`; reason records the delivered result and validation.
+- `start`: requires an active non-project Action tagged `AFK`; adds `进行中`, removes `HITL` and records the run owner.
+- `done`: removes `进行中`, adds `HITL`; reason records the delivered result and validation.
 - `needs_human`: same tags as done; reason records what the human must decide or provide.
 
-AFK and other tags remain. No lifecycle event completes the Action. A stable runId makes retries idempotent; another run cannot claim an Action already marked 进行中. Transition notes append to existing notes. Missing workflow tags 进行中/PHV are created in the same transaction. AFK must already exist on the Action.
+AFK and other tags remain. No lifecycle event completes the Action. A stable runId makes retries idempotent; another run cannot claim an Action already marked 进行中. Transition notes append to existing notes. Missing workflow tags 进行中/HITL are created in the same transaction. AFK must already exist on the Action.
 
 Accepted transitions are persisted in `~/.local/state/omnifocus-agent/pending` before sync writes and removed after verification. `scripts/agent-hook.mjs` retries these through MCP at Codex Stop / Hermes agent:end. It does not infer success from a stopped conversation. The Agent skill must explicitly call the semantic event. Pending events older than 24 hours are retained for manual inspection. A lock alongside the configured client state serializes lifecycle changes on this machine; it is not a cross-machine distributed lock. After a process crash, inspect a stale `.agent-lock` before removing it.
 
@@ -171,3 +171,16 @@ Local installation includes `omnifocus-agent-workflow` skills for both hosts. Ex
 `of_add_task` / `of_edit_task` accept `planned` and a structured `repetition` object. `of_edit_task` also supports `clearPlanned` and `repetition: null`. Recurrence validation does not expand infinite schedules. Task reads expose repetition method, schedule, anchor and catch-up alongside the rule.
 
 See [OmniFocus parity and remaining limitations](docs/omnifocus-parity.md). In particular, completing repeating items through sync is blocked until next-instance generation is supported; configure repetition through MCP and complete occurrences in OmniFocus for now.
+
+
+查询默认返回未完成动作摘要，每页50条，最大200条，以 offset/nextOffset 翻页。完整备注按需用 of_get_task。已完成查询使用 doneDays:7 或 done:"--done7"（14等正整数同理），仅返回最近N×24小时完成的动作。filter:all 不再绕过完成过滤；includeCompleted:true 必须同时指定完成天数。生命周期统一使用 👨 HITL，不再添加 PHV 或等待；已有等待保留。
+
+
+## 默认本地写入（2026-11-02）
+全部13个旧写入工具默认 backend:local，使用本机 OmniFocus 自动化；本地事务包用于读取，本地文件不直接写入。逐次显式传 backend:remote 才使用旧 WebDAV 实现；不存在失败自动回退。启动本地 MCP 无需远端凭据。of_agent_transition 固定本机执行，不提供远端切换。
+
+of_set_task_status 丢弃默认 allOccurrences:false，仅丢弃当前重复实例；只有显式 true 才丢弃整个系列。恢复 active 不接受 allOccurrences:true。远端单次丢弃重复任务暂不支持，会在写入前拒绝，不能偷偷等价成全部丢弃。普通非重复动作远端仍可丢弃。
+
+本地检查周期支持 @Nd/@Nw/@Nm/@Ny；~ 浮动周期因本机API无法完整表达而拒绝，需明确选择远端。本地 review_batch 会先验证全部输入但不是原子事务，响应失败后应查询确认，勿盲目重放。原生完成重复任务可能产生新实例，返回 completedId。
+
+部署：Hermes /reload-mcp；Codex重连MCP。保留原安全规则、HITL及任务有效状态检查。已通过65项测试和隔离临时对象本机写入测试；测试对象已清理。

@@ -1,5 +1,8 @@
 import { validateTransactionXml } from "./transaction-validation.js";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
+import { homedir } from "node:os";
+import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
 import { WebDavClient } from "../webdav/client.js";
 import {
   createId,
@@ -48,6 +51,24 @@ export function utcStamp(d: Date = new Date()): string {
     `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}` +
     `${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}`
   );
+}
+
+/** Read a JSON file if present and parseable, else null. */
+function readJsonIfExists(path: string): any | null {
+  try {
+    if (!existsSync(path)) return null;
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/** Atomic JSON write via tmp file + rename. */
+function writeJsonAtomic(path: string, value: unknown): void {
+  mkdirSync(join(path, ".."), { recursive: true });
+  const tmp = path + ".tmp";
+  writeFileSync(tmp, JSON.stringify(value));
+  renameSync(tmp, path);
 }
 
 /**
@@ -104,6 +125,20 @@ export class OmniFocusStore {
     return { transactions, clientFiles, encrypted };
   }
 
+  /** list() with retry — the first PROPFIND is the most exposed to a flaky server. */
+  async listResilient(attempts = 8): Promise<StoreListing> {
+    let last: unknown;
+    for (let a = 0; a < attempts; a++) {
+      try {
+        return await this.list();
+      } catch (e) {
+        last = e;
+        await new Promise((r) => setTimeout(r, 1500 * (a + 1)));
+      }
+    }
+    throw last;
+  }
+
   /** Fetch a transaction file and return its decrypted contents.xml text. */
   async readContents(name: string): Promise<string> {
     let bytes = await this.dav.get(this.childUrl(name));
@@ -114,15 +149,55 @@ export class OmniFocusStore {
     return strFromU8(entry);
   }
 
-  /** Reconstruct the full database by replaying all transactions in order. */
-  async loadDatabase(): Promise<{ db: Database; listing: StoreListing; headTail: string | null }> {
-    const listing = await this.list();
-    const db = new Database();
-    for (const txn of listing.transactions) {
-      db.applyTransaction(await this.readContents(txn.name));
+  /** readContents with per-file retry — one flaky GET must not kill a full replay. */
+  private async readContentsResilient(name: string, attempts = 5): Promise<string> {
+    let last: unknown;
+    for (let a = 0; a < attempts; a++) {
+      try {
+        return await this.readContents(name);
+      } catch (e) {
+        last = e;
+        await new Promise((r) => setTimeout(r, 2000 * (a + 1)));
+      }
     }
+    throw last;
+  }
+
+  /** Reconstruct the database, using a local snapshot + only fetching new transactions. */
+  async loadDatabase(): Promise<{ db: Database; listing: StoreListing; headTail: string | null }> {
+    const listing = await this.listResilient();
+    const names = listing.transactions.map((t) => t.name);
+    let db: Database | null = null;
+
+    const snapPath = this.snapshotPath();
+    const snap = readJsonIfExists(snapPath);
+    if (snap && Array.isArray(snap.txns) && Array.isArray(snap.data?.tasks)) {
+      // Trust snapshot only if its txn list is an exact prefix of the current
+      // append-only listing (nothing reordered or removed).
+      const ok =
+        snap.txns.length <= names.length &&
+        (snap.txns as string[]).every((n, i) => names[i] === n);
+      if (ok) {
+        db = Database.fromJSON(snap.data);
+        for (const txn of listing.transactions.slice(snap.txns.length))
+          db.applyTransaction(await this.readContentsResilient(txn.name));
+      }
+    }
+
+    if (!db) {
+      db = new Database();
+      for (const txn of listing.transactions)
+        db.applyTransaction(await this.readContentsResilient(txn.name));
+    }
+
+    writeJsonAtomic(snapPath, { txns: names, savedAt: new Date().toISOString(), data: db.toJSON() });
     const headTail = this.computeHeadTail(listing.transactions);
     return { db, listing, headTail };
+  }
+
+  private snapshotPath(): string {
+    const dir = join(homedir(), ".cache", "omnifocus-sync-mcp");
+    return join(dir, "db-snapshot.json");
   }
 
   /** The current head tail id = a tail that no other transaction lists as a parent. */
