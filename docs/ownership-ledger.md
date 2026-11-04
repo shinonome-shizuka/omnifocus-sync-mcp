@@ -54,3 +54,7 @@ Multica：NPCT-30，issue 01a19cf1-980a-7a3b-813d-7d791dd150b3，CaseStudy生成
 - Codex/Hermes/Multica 的 session map、执行守卫、Stop 均遵守转交状态。
 - 运行期间无等待/HITL 自动回加；最终交付添加 HITL、保留 AFK、不完成任务。
 - 使用模拟任务与临时账本测试；真实任务只做经授权的实际交接，不用于反复测试。
+
+## 2026-11-03 实现续接
+
+源码与隔离测试进度见 [v2 实现与切换边界](ownership-ledger-v2-implementation.md)。三个宿主适配器已纳入版本控制，但 v2 仍是 staged 协议，未替换生产 legacy 生命周期。真实归属转交必须另外核实授权与交付证据，不根据历史案例记录自动执行。

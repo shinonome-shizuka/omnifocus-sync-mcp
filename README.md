@@ -217,3 +217,5 @@ of_set_task_status 丢弃默认 allOccurrences:false，仅丢弃当前重复实�
 部署：Hermes /reload-mcp；Codex重连MCP。保留原安全规则、HITL及任务有效状态检查。已通过65项测试和隔离临时对象本机写入测试；测试对象已清理。
 
 AFK/Hook 接线、显式恢复与真实验证边界见 [afk-hooks-verification](docs/afk-hooks-verification.md)。
+
+历史实现记录见 [v2 切换边界](docs/ownership-ledger-v2-implementation.md) 和 [2026-11-03 审计](docs/mcp-audit-fixes.md)。这些记录不代表 v2 已上线；当前状态以统一入口和 AFK Hooks 验证文档为准。

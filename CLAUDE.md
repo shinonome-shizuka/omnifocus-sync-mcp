@@ -36,7 +36,7 @@ Read [unified entry](docs/unified-entry.md), [AFK/Hook verification and recovery
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **omnifocus-sync-mcp-fork** (648 symbols, 1836 relationships, 50 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **omnifocus-sync-mcp-fork**. Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
