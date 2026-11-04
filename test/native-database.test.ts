@@ -1,0 +1,33 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';import path from 'node:path';import os from 'node:os';import {DatabaseSync} from 'node:sqlite';
+import {zipSync,strToU8} from 'fflate';import {databaseTaskList,databaseTask} from '../src/databaseReads.js';
+test('native snapshot wins over delayed transaction files without writing either source',async t=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'of-native-db-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const sqlFile=path.join(root,'native.db'),txn=path.join(root,'data.ofocus');await fs.mkdir(txn);
+ const s=new DatabaseSync(sqlFile);s.exec(await fs.readFile(new URL('./fixtures/native-schema.sql',import.meta.url),'utf8'));
+ const insert=(table:string,values:Record<string,any>)=>{const cols=s.prepare(`PRAGMA table_info(${table})`).all() as any[];const row=Object.fromEntries(cols.filter(c=>c.notnull).map(c=>[c.name,c.type==='text'?'':0]));Object.assign(row,values);s.prepare(`INSERT INTO ${table} (${Object.keys(row).join(',')}) VALUES (${Object.keys(row).map(()=>'?').join(',')})`).run(...Object.values(row));};
+ insert('Task',{persistentIdentifier:'a',name:'Native name',plainTextNote:'Native note',dateAdded:815400000,dateModified:815400010,inInbox:1,effectiveInInbox:1,effectiveContainingProjectInfoActive:1,effectiveContainingProjectInfoRemaining:1,blocked:0,nextTaskOfProjectInfo:'project-info'});
+ s.close();
+ await fs.writeFile(path.join(txn,'00000000000000=root+base.zip'),zipSync({'contents.xml':strToU8('<omnifocus><task id="a"><name>Old name</name><inbox>true</inbox></task><task id="deleted"><name>Already deleted in app</name><inbox>true</inbox></task></omnifocus>')}));
+ const saved={db:process.env.OMNIFOCUS_LOCAL_DATABASE,cache:process.env.OMNIFOCUS_NATIVE_DATABASE};process.env.OMNIFOCUS_LOCAL_DATABASE=txn;process.env.OMNIFOCUS_NATIVE_DATABASE=sqlFile;
+ t.after(()=>{for(const [key,v] of [['OMNIFOCUS_LOCAL_DATABASE',saved.db],['OMNIFOCUS_NATIVE_DATABASE',saved.cache]]){if(v===undefined)delete process.env[key!];else process.env[key!]=v;}});
+ const before=await fs.readFile(sqlFile),files=await fs.readdir(txn);
+ const list=await databaseTaskList();assert.deepEqual(list.tasks.map((x:any)=>x.id),['a']);
+ const detail=await databaseTask('a');assert.equal(detail.name,'Native name');assert.equal(detail.note,'Native note');assert.equal(detail.ofStatus,'Next');assert.equal(detail.statusSource,'omnifocus-sqlite');
+ assert.equal(detail.availabilityVerified,true);await assert.rejects(databaseTask('deleted'),/not found/);
+ assert.deepEqual(await fs.readFile(sqlFile),before);assert.deepEqual(await fs.readdir(txn),files);
+ // A committed WAL update must be visible on the next request without a checkpoint.
+ const writer=new DatabaseSync(sqlFile);writer.exec('PRAGMA journal_mode=WAL');
+ writer.exec("UPDATE Task SET containingProjectInfo='paused',effectiveContainingProjectInfoActive=0");
+ assert.equal((await databaseTask('a')).available,false);assert.equal((await databaseTask('a')).ofStatus,'Blocked');
+ writer.exec('UPDATE Task SET effectiveContainingProjectInfoActive=1');
+ writer.prepare("UPDATE Task SET name=?,blocked=1,nextTaskOfProjectInfo=NULL WHERE persistentIdentifier='a'").run('WAL name');
+ assert.equal((await databaseTask('a')).name,'WAL name');assert.equal((await databaseTask('a')).available,false);
+ writer.exec('DELETE FROM Task');assert.equal((await databaseTaskList()).count,0);
+ writer.exec('ALTER TABLE Task RENAME COLUMN effectiveContainingProjectInfoActive TO unsupportedProjectActive');
+ await assert.rejects(databaseTaskList(),/Unsupported OmniFocus SQLite schema: Task/);
+ writer.exec('ALTER TABLE Task RENAME COLUMN unsupportedProjectActive TO effectiveContainingProjectInfoActive');
+ writer.exec('DROP TABLE Context');writer.close();
+ await assert.rejects(databaseTaskList(),/Unsupported OmniFocus SQLite schema/);
+ await fs.rename(sqlFile,sqlFile+'.removed');await assert.rejects(databaseTaskList());
+});

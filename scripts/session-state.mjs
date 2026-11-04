@@ -8,8 +8,9 @@ export function sessionId(p){return p.session_id||p.sessionId||process.env.CODEX
 export function unpack(r){
  for(let i=0;i<8;i++){
   if(typeof r==='string'){try{r=JSON.parse(r);continue;}catch{return {};}}
-  if(r?.isError||r?.error)return {ok:false};
+  if(r?.isError)return {ok:false,error:r.error||'MCP error'};
   if(r?.ok!==undefined)return r;
+  if(r?.error)return {ok:false,error:r.error,status:r.status};
   if(r?.structuredContent){r=r.structuredContent;continue;}
   if(r?.result!==undefined){r=r.result;continue;}
   const text=r?.content?.find(c=>c.type==='text')?.text;if(text){r=text;continue;}
@@ -22,23 +23,26 @@ export function reduce(s,p){
  s.updatedAt=now;s.bindings||=[];
  if(event==='UserPromptSubmit'){s.turnId=p.turn_id||null;s.work=String(p.prompt||'').slice(0,500);s.resolution=null;}
  if(event==='Resolve'){s.resolution={turnId:p.turn_id||s.turnId,status:p.status,reason:p.reason,at:now};}
- if(event==='PreToolUse'&&/of_agent_transition$/.test(p.tool_name||'')){
-  const a=p.tool_input||{};if(!a.id||!a.runId||!['start','done','needs_human'].includes(a.event))return s;
+ if(event==='PreToolUse'&&/of_(agent|monitor)_transition$/.test(p.tool_name||'')){
+  const a=p.tool_input||{};if(!a.id||!a.runId||!['start','done','needs_human','checked'].includes(a.event))return s;
   let b=s.bindings.find(b=>b.id===a.id&&b.runId===a.runId);
-  if(!b){b={id:a.id,url:'omnifocus:///task/'+a.id,runId:a.runId,work:s.work||a.reason||'',phase:'unconfirmed'};s.bindings.push(b);}
-  b.request={event:a.event,reason:a.reason||'',toolUseId:p.tool_use_id,at:now};b.updatedAt=now;
+  if(!b){b={id:a.id,url:'omnifocus:///task/'+a.id,runId:a.runId,work:s.work||a.reason||'',phase:'unconfirmed',mode:/of_monitor_transition$/.test(p.tool_name||'')?'monitor':'action'};s.bindings.push(b);}
+  if(['handed_off','released'].includes(b.phase))return s;
+  b.request={event:a.event,reason:a.reason||'',arguments:structuredClone(a),toolUseId:p.tool_use_id,at:now};b.updatedAt=now;
   // Requested events are not evidence of a successful remote write.
   b.phase=a.event==='start'?'start_pending':'handoff_pending';
  }
- if(event==='PostToolUse'&&/of_agent_transition$/.test(p.tool_name||'')){
+ if(event==='PostToolUse'&&/of_(agent|monitor)_transition$/.test(p.tool_name||'')){
   const a=p.tool_input||{},r=unpack(p.tool_response);let b=s.bindings.find(b=>b.id===a.id&&b.runId===a.runId);
   if(!b){reduce(s,{...p,hook_event_name:'PreToolUse'});b=s.bindings.find(b=>b.id===a.id&&b.runId===a.runId);}
-  if(b){if(r?.ok===true&&r.id===a.id&&r.event===a.event){b.phase=a.event==='start'?'active':'handed_off';b.confirmedEvent=a.event;b.confirmedAt=now;s.resolution={status:'bound',at:now};}else if(r?.ok===false&&r.status==='rejected'&&a.event==='start'&&b.confirmedEvent!=='start'){b.phase='rejected';b.lastError=r.error;s.resolution={status:'rejected',at:now};}else{b.lastError='MCP transition did not return matching ok:true';}b.updatedAt=now;}
+  if(b&&['handed_off','released'].includes(b.phase))return s;
+  if(b?.request?.toolUseId&&p.tool_use_id&&b.request.toolUseId!==p.tool_use_id)return s;
+  if(b){if(r?.ok===true&&r.id===a.id&&r.event===a.event){b.phase=a.event==='start'?'active':a.event==='checked'?'released':'handed_off';b.confirmedEvent=a.event;b.confirmedAt=now;s.resolution={status:'bound',at:now};}else if(r?.ok===false&&r.status==='rejected'&&a.event==='start'&&b.confirmedEvent!=='start'){b.phase='rejected';b.lastError=r.error;s.resolution={status:'rejected',at:now};}else{b.lastError='MCP transition did not return matching ok:true';}b.updatedAt=now;}
  }
  return s;
 }
 export function guard(s,p){
- const unfinished=(s.bindings||[]).filter(b=>!['handed_off','rejected'].includes(b.phase));
+ const unfinished=(s.bindings||[]).filter(b=>!['handed_off','rejected','released'].includes(b.phase));
  let reason=null;
  if(unfinished.length)reason='OmniFocus session has unfinished lifecycle records: '+unfinished.map(b=>`${b.id} runId=${b.runId} phase=${b.phase}`).join('; ')+'. Check MCP state. For delivered work call done; for an actual human blocker call needs_human, with the same runId and concrete reason. Never infer success from Stop or steal another run. If unable to resolve, explicitly report the blocker.';
  else if(!s.resolution)reason='OmniFocus binding check is missing for this turn. Search matching authorized AFK work before claiming. If no matching authorized Action or this is only diagnosis/conversation, record resolve with a specific reason using agent-session.mjs; do not invent or claim an unrelated task.';

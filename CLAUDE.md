@@ -1,7 +1,42 @@
+# OmniFocus unified MCP — development guide
+
+## Current architecture
+
+This fork is the single MCP entrypoint. `src/tools.ts` owns the ordinary tool registry. The companion omnifocus-cli owns all AppleScript/JXA/osascript execution; its `of mcp` only launches this service. Do not duplicate tools in the CLI or execute scripts from this server.
+
+- Local reads: `src/nativeDatabase.ts` opens a read-only SQLite/WAL snapshot and adapts it to the common data model. `src/localDatabase.ts` scopes one snapshot per read request; missing or unsupported native schema fails explicitly.
+- Remote / explicit transaction reads: `src/backend.ts`, `src/storage/`, and `src/ofocus/` share the ZIP/XML transaction engine. Read responses expose source and scope; persisted data is not live application memory.
+- Default writes: named JSON request through `src/nativeBridge.ts` to of-cli, native modification, Omni Automation `Database.save()`, then independent persisted readback. `src/writeResult.ts` returns verified / pending-database / acknowledged-unverified. Save is not external-data reload or proof of WebDAV completion.
+- Direct transaction writes remain explicitly high-risk: each ordinary call must set `writeMode: direct-database` and local/remote backend. No fallback, and never a bypass for AFK/monitor lifecycle failures.
+- Exports: data reads followed by pure `src/formatData.ts` formatting. Attachment metadata and payloads also use the data/storage layers.
+
+## Runtime and lifecycle boundaries
+
+`npm run build` produces the production legacy entry from `runtime/`. `src/index.ts` and `src/ledger/` are staged v2, tested separately; do not silently deploy v2 or mix ownership protocols.
+
+`runtime/legacyTransition.js` fences uncertain writes with an intent and only confirms after persisted tag/note verification. `src/legacyRecovery.ts` exposes explicit legacy reconciliation: inspect first, then accept already-observed effects or discard an exactly unchanged unwritten intent with an evidence token. It never writes OmniFocus or automatically replays a request. Old intents without adequate ownership evidence remain fenced.
+
+Both ordinary and monitor lifecycle events must match installed Codex/Hermes Pre/Post Hooks. Stop audits only the current session; it neither scans all pending runs nor retries mutations. Keep complete request parameters, including codexThreadId, actor, eventId and expectedRevision. Never infer done from Stop, steal ownership, automatically remove HITL/等待, or mark an Action completed at handoff.
+
+## Build and verification
+
+Requires Node >=22.16.0. Build the companion CLI separately and configure `OMNIFOCUS_CLI_PATH` when checkouts are not siblings. Runtime credentials, databases, user state, personal host config, generated builds and test artifacts must stay outside commits.
+
+```bash
+npm ci
+npm run build
+npm test
+npm run test:staged
+```
+
+Use isolated fixtures for failures and ownership races. Live tests require authorized disposable tasks and verified cleanup; report whether tests exercised the actual host, configured Hook commands, or isolated wrappers. Do not claim Hermes gateway hot reload or remote sync without evidence. Existing MCP processes must reconnect for new tools.
+
+Read [unified entry](docs/unified-entry.md), [AFK/Hook verification and recovery](docs/afk-hooks-verification.md), [monitor workflow](docs/monitoring-workflow.md), and the [workflow skill](skills/omnifocus-agent-workflow/SKILL.md).
+
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **omnifocus-sync-mcp-fork** (439 symbols, 1341 relationships, 33 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **omnifocus-sync-mcp-fork** (648 symbols, 1836 relationships, 50 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

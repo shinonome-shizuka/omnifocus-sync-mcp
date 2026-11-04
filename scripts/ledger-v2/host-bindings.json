@@ -1,0 +1,59 @@
+{
+  "protocolVersion": 2,
+  "deploymentStatus": "staged-not-installed",
+  "entrypoint": "scripts/ledger-v2/guard.mjs",
+  "allHosts": {
+    "timeoutSeconds": 30,
+    "failClosed": true,
+    "assignmentEnvironment": "OF_LEDGER_ASSIGNMENT_FILE",
+    "assignmentSource": "trusted scheduler private file before first tool",
+    "postVerification": "authoritative ledger, never raw ok:true"
+  },
+  "codex": {
+    "argv": [
+      "codex"
+    ],
+    "events": {
+      "PreToolUse": "PreToolUse",
+      "PostToolUse": "PostToolUse",
+      "Stop": "Stop"
+    },
+    "preMatcher": ".*",
+    "postMatcher": "of_agent_(transition|transfer)$",
+    "denyFormat": "hookSpecificOutput.permissionDecision=deny; Stop decision=block"
+  },
+  "hermes": {
+    "argv": [
+      "hermes"
+    ],
+    "events": {
+      "pre_tool_call": "pre_tool_call",
+      "post_tool_call": "post_tool_call",
+      "pre_verify": "pre_verify"
+    },
+    "preMatcher": ".*",
+    "postMatcher": ".*of_agent_(transition|transfer)$",
+    "denyFormat": "action=block and exitCode=2",
+    "stopRegistration": "verified pre_verify: code-edit turns only, bounded max_verify_nudges; not a universal fail-closed Stop",
+    "stopDenyFormat": "action=continue, message explains unresolved ownership"
+  },
+  "multica": {
+    "argv": [
+      "multica"
+    ],
+    "requiredHostEvents": [
+      "pre_tool_call",
+      "post_tool_call",
+      "agent_stop"
+    ],
+    "requiredHostFields": [
+      "session_id",
+      "hook_event_name",
+      "tool_name",
+      "tool_input"
+    ],
+    "denyFormat": "action=block and exitCode=2",
+    "registrationStatus": "pending verification of deployed Multica worker integration",
+    "privateCredentialChannel": "not yet verified; do not send through issue description or comments"
+  }
+}

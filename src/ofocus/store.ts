@@ -1,8 +1,6 @@
 import { validateTransactionXml } from "./transaction-validation.js";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
-import { homedir } from "node:os";
-import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import {StoreStorage, WebDavStorage} from "../storage/index.js";
 import { WebDavClient } from "../webdav/client.js";
 import {
   createId,
@@ -28,6 +26,7 @@ export interface StoreListing {
   transactions: TransactionFile[];
   clientFiles: string[];
   encrypted: boolean;
+  signature?: string;
 }
 
 function parseTxnName(name: string): TransactionFile | null {
@@ -53,48 +52,26 @@ export function utcStamp(d: Date = new Date()): string {
   );
 }
 
-/** Read a JSON file if present and parseable, else null. */
-function readJsonIfExists(path: string): any | null {
-  try {
-    if (!existsSync(path)) return null;
-    return JSON.parse(readFileSync(path, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-/** Atomic JSON write via tmp file + rename. */
-function writeJsonAtomic(path: string, value: unknown): void {
-  mkdirSync(join(path, ".."), { recursive: true });
-  const tmp = path + ".tmp";
-  writeFileSync(tmp, JSON.stringify(value));
-  renameSync(tmp, path);
-}
-
 /**
- * A live OmniFocus sync store on a WebDAV server. Handles listing, decryption,
+ * A transport-independent OmniFocus transaction store. Handles listing, decryption,
  * state reconstruction, and writing new transactions.
  */
 export class OmniFocusStore {
   private docKey: DocumentKey | null = null;
 
-  constructor(
-    private readonly dav: WebDavClient,
-    /** URL of the `.ofocus` collection, with trailing slash. */
-    private readonly ofocusUrl: string,
-  ) {}
-
-  private childUrl(name: string): string {
-    return this.ofocusUrl.replace(/\/+$/, "") + "/" + name;
+  readonly storage:StoreStorage;
+  private loadedSignature:string|undefined;
+  constructor(storage: StoreStorage | WebDavClient, ofocusUrl = '') {
+    this.storage = storage && 'kind' in storage ? storage as StoreStorage : new WebDavStorage(storage as WebDavClient,ofocusUrl);
   }
 
   /** Load and unlock the encryption metadata with a passphrase, if present. */
   async unlock(passphrase: string): Promise<void> {
-    const url = this.childUrl(ENCRYPTED_METADATA);
-    if (!(await this.dav.exists(url))) {
+    const url = ENCRYPTED_METADATA;
+    if (!(await this.storage.exists(url))) {
       throw new Error("Store is not encrypted (no `encrypted` metadata file)");
     }
-    const meta = parseEncryptionMetadata(await this.dav.get(url));
+    const meta = parseEncryptionMetadata(await this.storage.read(url));
     this.docKey = DocumentKey.fromMetadata(meta, passphrase);
   }
 
@@ -103,7 +80,7 @@ export class OmniFocusStore {
   }
 
   async list(): Promise<StoreListing> {
-    const entries = await this.dav.propfind(this.ofocusUrl);
+    const entries = await this.storage.list();
     const transactions: TransactionFile[] = [];
     const clientFiles: string[] = [];
     let encrypted = false;
@@ -122,11 +99,12 @@ export class OmniFocusStore {
     }
     // Chronological order; baseline (00000000000000) naturally sorts first.
     transactions.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-    return { transactions, clientFiles, encrypted };
+    const signature=JSON.stringify(entries.filter(e=>e.name.endsWith('.zip')||e.name==='encrypted').map(e=>[e.name,'revision' in e?e.revision:null]).sort());
+    return { transactions, clientFiles, encrypted, signature };
   }
 
   /** list() with retry — the first PROPFIND is the most exposed to a flaky server. */
-  async listResilient(attempts = 8): Promise<StoreListing> {
+  async listResilient(attempts = this.storage.kind === "local" ? 1 : 8): Promise<StoreListing> {
     let last: unknown;
     for (let a = 0; a < attempts; a++) {
       try {
@@ -141,7 +119,7 @@ export class OmniFocusStore {
 
   /** Fetch a transaction file and return its decrypted contents.xml text. */
   async readContents(name: string): Promise<string> {
-    let bytes = await this.dav.get(this.childUrl(name));
+    let bytes = await this.storage.read(name);
     if (this.docKey) bytes = decryptFile(this.docKey, name, bytes);
     const files = unzipSync(new Uint8Array(bytes));
     const entry = files["contents.xml"];
@@ -150,7 +128,7 @@ export class OmniFocusStore {
   }
 
   /** readContents with per-file retry — one flaky GET must not kill a full replay. */
-  private async readContentsResilient(name: string, attempts = 5): Promise<string> {
+  private async readContentsResilient(name: string, attempts = this.storage.kind === "local" ? 1 : 5): Promise<string> {
     let last: unknown;
     for (let a = 0; a < attempts; a++) {
       try {
@@ -163,41 +141,26 @@ export class OmniFocusStore {
     throw last;
   }
 
-  /** Reconstruct the database, using a local snapshot + only fetching new transactions. */
+  /** Reconstruct a consistent snapshot in transaction-parent order. */
   async loadDatabase(): Promise<{ db: Database; listing: StoreListing; headTail: string | null }> {
-    const listing = await this.listResilient();
-    const names = listing.transactions.map((t) => t.name);
-    let db: Database | null = null;
-
-    const snapPath = this.snapshotPath();
-    const snap = readJsonIfExists(snapPath);
-    if (snap && Array.isArray(snap.txns) && Array.isArray(snap.data?.tasks)) {
-      // Trust snapshot only if its txn list is an exact prefix of the current
-      // append-only listing (nothing reordered or removed).
-      const ok =
-        snap.txns.length <= names.length &&
-        (snap.txns as string[]).every((n, i) => names[i] === n);
-      if (ok) {
-        db = Database.fromJSON(snap.data);
-        for (const txn of listing.transactions.slice(snap.txns.length))
-          db.applyTransaction(await this.readContentsResilient(txn.name));
+    for(let attempt=0;attempt<3;attempt++){
+      const listing=await this.listResilient();
+      if(!listing.transactions.some(t=>t.isBaseline))throw Error('OmniFocus baseline missing');
+      const db=new Database();
+      const pending=[...listing.transactions], applied=new Set<string>();
+      // Parent order, not wall-clock order: clock skew and merge branches are valid.
+      while(pending.length){
+        const index=pending.findIndex(t=>t.isBaseline||t.parents.every(p=>applied.has(p)));
+        if(index<0)throw Error('Transaction history has missing parents or a cycle');
+        const [txn]=pending.splice(index,1);
+        db.applyTransaction(await this.readContentsResilient(txn.name));applied.add(txn.tail);
       }
+      const after=await this.listResilient();
+      if(after.signature!==listing.signature)continue;
+      this.loadedSignature=listing.signature;
+      return {db,listing,headTail:this.computeHeadTail(listing.transactions)};
     }
-
-    if (!db) {
-      db = new Database();
-      for (const txn of listing.transactions)
-        db.applyTransaction(await this.readContentsResilient(txn.name));
-    }
-
-    writeJsonAtomic(snapPath, { txns: names, savedAt: new Date().toISOString(), data: db.toJSON() });
-    const headTail = this.computeHeadTail(listing.transactions);
-    return { db, listing, headTail };
-  }
-
-  private snapshotPath(): string {
-    const dir = join(homedir(), ".cache", "omnifocus-sync-mcp");
-    return join(dir, "db-snapshot.json");
+    throw Error('Database changed during read; retry');
   }
 
   /** The current head tail id = a tail that no other transaction lists as a parent. */
@@ -221,14 +184,23 @@ export class OmniFocusStore {
     parents: string[],
   ): Promise<{ name: string; tail: string }> {
     validateTransactionXml(contentsXml);
+    if(this.loadedSignature!==undefined && (await this.listResilient()).signature!==this.loadedSignature)throw Error('Database changed before commit; no transaction written. Refresh before retrying.');
     const tail = createId();
     const chain = [...parents, tail].join("+");
     const name = `${utcStamp()}=${chain}.zip`;
     const zip = zipSync({ "contents.xml": strToU8(contentsXml) }, { level: 6 });
     let payload: Uint8Array = Buffer.from(zip);
     if (this.docKey) payload = encryptFile(this.docKey, name, Buffer.from(payload));
-    await this.dav.put(this.childUrl(name), payload, "application/octet-stream");
+    await this.storage.write(name, payload);
     return { name, tail };
+  }
+
+  async readAttachmentData(identifier:string):Promise<Uint8Array>{
+    if(!/^data-[a-zA-Z0-9_-]+$/.test(identifier))throw Error('Invalid attachment data identifier');
+    const name='data/'+identifier+'.zip';
+    let bytes=await this.storage.read(name);
+    if(this.docKey)bytes=Buffer.from(decryptFile(this.docKey,identifier+'.zip',bytes));
+    return bytes;
   }
 
   /** Write (or refresh) a `.client` registration file. */
@@ -236,13 +208,11 @@ export class OmniFocusStore {
     const name = `${utcStamp()}=${clientId}.client`;
     let payload: Uint8Array = Buffer.from(plistXml, "utf8");
     if (this.docKey) payload = encryptFile(this.docKey, name, Buffer.from(plistXml, "utf8"));
-    await this.dav.put(this.childUrl(name), payload, "application/octet-stream");
+    await this.storage.write(name, payload);
     return name;
   }
 
   async ensureExists(): Promise<void> {
-    if (!(await this.dav.exists(this.ofocusUrl))) {
-      await this.dav.mkcol(this.ofocusUrl);
-    }
+    await this.storage.create();
   }
 }

@@ -13,6 +13,7 @@ export interface OFTask {
   parentId: string | null; // parent task/project (<task idref>)
   isProject: boolean;
   projectFolderId: string | null;
+  singleton?: boolean;
   projectStatus: string | null; // active|inactive|done|dropped
   inInbox: boolean;
   rank: number | null;
@@ -45,6 +46,8 @@ export interface OFTag {
   name: string;
   parentId: string | null;
   rank: number | null;
+  prohibitsNextAction?: boolean;
+  droppedDate?: string | null;
 }
 
 export function newTask(id: string): OFTask {

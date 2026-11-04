@@ -1,3 +1,4 @@
+import {handoffNotePatch} from './handoffNote.js';
 import { Database } from './database.js';
 import { createId } from '../crypto/index.js';
 import { buildTaskTagPatch } from './writer.js';
@@ -40,10 +41,6 @@ export function planAgentTransition(db:Database,input:AgentTransition, ownership
  const addId=resolve(target,true)!;const removeId=resolve(unwanted,false);
  const current=new Set(db.view(task).tagIds);
  // Runtime ownership is persisted locally by the service, not in the user's note.
- const title=input.event==='done'?'交付':'需要你处理';
- const reason=(input.reason??'').trim().replace(/\[of-agent:/g,'[of-agent-note:');
- const handoff=`${title}：${reason}`;
- const original=task.note??'';
- const note=input.event==='start'?original:(original.endsWith(handoff)?original:(original?original+'\n\n':'')+handoff);
- return {xml:buildTaskTagPatch(task.id,{createTags,addIds:[addId].filter(id=>!current.has(id)),removeJoinIds:db.taskTagJoins(task.id).filter(j=>j.tagId===removeId).map(j=>j.id),clearPrimary:!!removeId&&task.primaryTagId===removeId,added:task.added,note})};
+ const notePatch=input.event==='start'?{}:handoffNotePatch(db,task.id,input.event,(input.reason??'').replace(/\[of-agent:/g,'[of-agent-note:'));
+ return {xml:buildTaskTagPatch(task.id,{createTags,addIds:[addId].filter(id=>!current.has(id)),removeJoinIds:db.taskTagJoins(task.id).filter(j=>j.tagId===removeId).map(j=>j.id),clearPrimary:!!removeId&&task.primaryTagId===removeId,added:task.added,...notePatch})};
 }

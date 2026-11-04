@@ -250,12 +250,13 @@ export function buildClientPlist(info: ClientInfo): string {
 /** Delta tag edits: preserve unrelated joins and all unrelated task fields. */
 export function buildTaskTagPatch(id: string, input: {
   addIds: string[]; removeJoinIds: string[]; clearPrimary: boolean;
-  added?: string | null; note?: string; createTags?: {id: string; name: string}[];
+  added?: string | null; note?: string; noteMarkup?: string; createTags?: {id: string; name: string}[];
 }): string {
   const task = [`<task id="${esc(id)}" op="update">`, `<modified>${utcIso()}</modified>`];
   if(input.added) task.push(`<added>${esc(input.added)}</added>`);
   if(input.clearPrimary) task.push('<context/>');
-  if(input.note !== undefined) task.push(`<note>${esc(input.note)}</note>`);
+  if(input.noteMarkup !== undefined) task.push(input.noteMarkup);
+  else if(input.note !== undefined) task.push(`<note>${esc(input.note)}</note>`);
   task.push('</task>');
   const elements = (input.createTags ?? []).map(t=>`<context id="${esc(t.id)}"><name>${esc(t.name)}</name></context>`);
   elements.push(task.join(''));

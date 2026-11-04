@@ -1,4 +1,4 @@
-import {evaluate} from './localWorkflow.js';
+import {nativeWrite} from './nativeBridge.js';
 export const localWriteTools=new Set(['of_manage_folder','of_manage_tag','of_create_project','of_update_task_tags','of_add_task','of_complete_task','of_edit_task','of_move_task','of_set_task_status','of_set_group_order','of_delete_task','of_set_review','of_review_batch']);
 export function writeScript(operation:string,args:any){
  if(!localWriteTools.has(operation))throw Error('Unsupported local operation');
@@ -49,5 +49,5 @@ export function writeScript(operation:string,args:any){
 }
 export async function writeLocal(name:string,args:any){
  if(/^(1|true|yes)$/i.test(process.env.OMNIFOCUS_READ_ONLY??''))throw Error('Server is read-only');
- return evaluate(writeScript(name,args));
+ return nativeWrite(name,args);
 }

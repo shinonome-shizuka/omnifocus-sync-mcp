@@ -9,7 +9,7 @@ function fixture(){
  const context={flattenedTasks:[task],flattenedTags:tags,view,norm:(n:string)=>n.replace(/^[^\p{L}\p{N}]+/u,'').trim(),Tag:class {name:string;constructor(n:string){this.name=n;tags.push(this)}}};
  return {task,run:(event:string,previous:any,validate=false)=>JSON.parse(vm.runInNewContext(transitionScript({id:'test',runId:'run',event,reason:'结果'},previous,view(task),validate),{...context}))};
 }
-test('local start, handoff, retry preserve note and other tags',()=>{const f=fixture();f.run('start',null,true);assert.equal(f.task.tags.length,1);f.run('start',null);assert.equal(f.task.note,'original');assert.throws(()=>f.run('start',null),/owned/);f.run('start',{runId:'run',event:'start'});f.run('done',{runId:'run',event:'start'});f.run('done',{runId:'run',event:'done'});assert.equal(f.task.note,'original\n\n交付：结果');assert.deepEqual(f.task.tags.map((t:any)=>t.name),['🤖 AFK','HITL']);});
+test('local start, handoff, retry preserve note and other tags',()=>{const f=fixture();f.run('start',null,true);assert.equal(f.task.tags.length,1);f.run('start',null);assert.equal(f.task.note,'original');assert.throws(()=>f.run('start',null),/owned/);f.run('start',{runId:'run',event:'start'});f.run('done',{runId:'run',event:'start'});f.run('done',{runId:'run',event:'done',reason:'结果'});assert.equal(f.task.note,'original\n\n交付：结果');assert.deepEqual(f.task.tags.map((t:any)=>t.name),['🤖 AFK','HITL']);});
 test('local rejects unclaimed handoff and ended-run restart',()=>{const f=fixture();assert.throws(()=>f.run('done',null),/Claim/);assert.throws(()=>f.run('start',{runId:'run',event:'done'}),/ended/);});
 
 test('real serializer rejects completed/dropped actions and inactive ancestors before mutation',()=>{

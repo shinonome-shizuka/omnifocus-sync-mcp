@@ -1,0 +1,21 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {Client} from '@modelcontextprotocol/sdk/client/index.js';
+import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
+test('built MCP exposes v2 schema, rejects old caller and readonly mutations without touching OF',async t=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'of-ledger-mcp-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const client=new Client({name:'isolated-ledger-test',version:'1'});
+ const transport=new StdioClientTransport({command:process.execPath,args:[fileURLToPath(new URL('../dist/index.js',import.meta.url))],env:{...process.env as Record<string,string>,OF_AGENT_STATE_DIR:root,OMNIFOCUS_READ_ONLY:'true'},stderr:'pipe'});
+ await client.connect(transport);t.after(()=>client.close());
+ const tools=await client.listTools();
+ for(const name of ['of_agent_transfer','of_agent_ledger','of_agent_check'])assert.ok(tools.tools.some(t=>t.name===name));
+ const transition=tools.tools.find(t=>t.name==='of_agent_transition')!;
+ assert.ok(transition.inputSchema.required?.includes('actor'));assert.ok(transition.inputSchema.required?.includes('protocolVersion'));
+ const old=await client.callTool({name:'of_agent_transition',arguments:{id:'fake',runId:'old',event:'start'}});assert.equal(old.isError,true);
+ const result=await client.callTool({name:'of_agent_transition',arguments:{protocolVersion:2,id:'fake',eventId:'test',expectedRevision:0,actor:{platform:'codex',sessionId:'fake',runId:'fake'},runId:'fake',event:'start'}});assert.equal(result.isError,true);assert.match(JSON.stringify(result),/read-only/);
+ assert.deepEqual(await fs.readdir(root),[]);
+});

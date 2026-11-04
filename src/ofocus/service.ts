@@ -35,19 +35,19 @@ interface Loaded {
 /** High-level OmniFocus operations over the sync store. */
 export class OmniFocusService {
   private readonly store: OmniFocusStore;
-  private readonly clientState: ClientState;
+  private clientState?: ClientState;
   private cache: Loaded | null = null;
   private initialized = false;
 
-  constructor(private readonly config: Config) {
+  constructor(private readonly config: Config, store?: OmniFocusStore) {
     const dav = new WebDavClient({
       baseUrl: config.ofocusUrl,
       username: config.username,
       password: config.password,
       authScheme: config.authScheme,
     });
-    this.store = new OmniFocusStore(dav, config.ofocusUrl);
-    this.clientState = loadOrCreateClientState(config.clientStateFile, config.clientName);
+    this.store = store ?? new OmniFocusStore(dav, config.ofocusUrl);
+
   }
 
   private async init(): Promise<void> {
@@ -93,6 +93,8 @@ export class OmniFocusService {
     return (await this.loaded()).db;
   }
 
+  async readAttachmentData(identifier:string):Promise<Uint8Array>{await this.init();return this.store.readAttachmentData(identifier);}
+
   private async resolveProjectId(nameOrId: string): Promise<string> {
     const projects = await this.projects();
     const byId = projects.find((p) => p.id === nameOrId);
@@ -123,9 +125,13 @@ export class OmniFocusService {
   /** Commit a contents.xml transaction and refresh our client registration. */
   private async commit(contentsXml: string): Promise<void> {
     const loaded = await this.loaded();
-    const parents = loaded.headTail ? [loaded.headTail] : [];
-    const { tail } = await this.store.writeTransaction(contentsXml, parents);
+    const parentIds = new Set(loaded.listing.transactions.flatMap(t=>t.parents));
+    const parents = loaded.listing.transactions.filter(t=>!parentIds.has(t.tail)).map(t=>t.tail);
+    const { tail, name } = await this.store.writeTransaction(contentsXml, parents);
+    this.cache=null;
+    try {
     // Register/refresh our client file so we're a recognized sync participant.
+    this.clientState ??= loadOrCreateClientState(this.config.clientStateFile, this.config.clientName);
     const plistXml = buildClientPlist({
       clientId: this.clientState.clientId,
       hostId: this.clientState.hostId,
@@ -135,8 +141,15 @@ export class OmniFocusService {
       tailIdentifiers: [tail],
     });
     await this.store.writeClientFile(this.clientState.clientId, plistXml);
-    // Local cache is now stale.
-    this.cache = null;
+    } catch(error) {throw new Error(`Transaction ${name} was published but client registration failed; read current state before retrying. ${String(error)}`);}
+  }
+
+  async applyTransaction(plan:(db:Database)=>string|null):Promise<Database> {
+    this.assertWritable();
+    const {db}=await this.refresh();
+    const xml=plan(db);
+    if(xml)await this.commit(xml);
+    return (await this.refresh()).db;
   }
 
   async manageCatalog(input:CatalogInput){
@@ -270,7 +283,7 @@ export class OmniFocusService {
     this.assertWritable();
     const {db}=await this.refresh();
     if(status==='active'&&allOccurrences)throw Error('allOccurrences only applies to dropping');
-    if(status==='dropped'&&!allOccurrences){let candidate=db.tasks.get(id);const seen=new Set<string>();while(candidate){if(seen.has(candidate.id))throw Error('Cyclic hierarchy');seen.add(candidate.id);if(candidate.repetitionRule)throw Error('Remote single-occurrence drop is unsupported; use local backend. No changes written.');candidate=candidate.parentId?db.tasks.get(candidate.parentId):undefined;}}
+    if(status==='dropped'&&!allOccurrences){let candidate=db.tasks.get(id);const seen=new Set<string>();while(candidate){if(seen.has(candidate.id))throw Error('Cyclic hierarchy');seen.add(candidate.id);if(candidate.repetitionRule)throw Error('Single-occurrence drop of a repeating action is not implemented by the shared transaction engine. No changes written.');candidate=candidate.parentId?db.tasks.get(candidate.parentId):undefined;}}
     await this.commit(buildUpdateTask(id,planTaskStatus(db,id,status)));
     const fresh=(await this.refresh()).db;
     const task=fresh.tasks.get(id);

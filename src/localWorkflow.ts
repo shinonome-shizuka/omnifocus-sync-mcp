@@ -1,25 +1,28 @@
-import {localViews,readLocalDatabase} from './localDatabase.js';
+import {currentBackend} from './backend.js';
+import {handoffReason} from './handoffLink.js';
+import {databaseTask,databaseTaskList} from './databaseReads.js';
+import {readLocalDatabase} from './localDatabase.js';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import {execFile} from 'node:child_process';
-import {promisify} from 'node:util';
-const exec=promisify(execFile);
 const state=path.join(os.homedir(),'.local/state/omnifocus-agent');
 export const helpers=`
 const norm=n=>n.replace(/^[^\\p{L}\\p{N}]+/u,'').trim();
 const inactive=t=>{for(let n=t;n;n=n.parent){if(n.completed||n.taskStatus===Task.Status.Completed)return 'completed';if(n.taskStatus===Task.Status.Dropped)return 'dropped';}const p=t.containingProject;if(p&&p.status===Project.Status.Dropped)return 'dropped';if(p&&p.status===Project.Status.Done)return 'completed';return null;};
-const view=t=>({id:t.id.primaryKey,name:t.name,note:t.note||'',tags:t.tags.map(x=>x.name),tagNames:t.tags.map(x=>x.name),projectName:t.containingProject?t.containingProject.name:null,estimatedMinutes:t.estimatedMinutes,inInbox:t.inInbox,status:inactive(t)||'active',completed:inactive(t)==='completed',dropped:inactive(t)==='dropped',isProject:!!(t.containingProject&&t.containingProject.task===t),project:t.containingProject?t.containingProject.name:null,parentId:t.parent?t.parent.id.primaryKey:null,defer:t.deferDate?t.deferDate.toISOString():null,due:t.dueDate?t.dueDate.toISOString():null,flagged:t.flagged,available:t.taskStatus===Task.Status.Available});
+const nativeStatus=t=>['Available','Next','DueSoon','Overdue','Blocked','Completed','Dropped'].find(k=>Task.Status[k]!==undefined&&t.taskStatus===Task.Status[k])||'Unknown';
+const projectLifecycle=t=>{const p=t.containingProject;if(!p)return null;return [['Active','active'],['OnHold','on hold'],['Done','done'],['Dropped','dropped']].find(([k])=>Project.Status[k]!==undefined&&p.status===Project.Status[k])?.[1]||'unknown';};
+const projectAllowsExecution=t=>!t.containingProject||projectLifecycle(t)==='active';
+const isAvailable=t=>!inactive(t)&&projectAllowsExecution(t)&&['Available','Next','DueSoon','Overdue'].includes(nativeStatus(t));
+const iso=d=>d?d.toISOString():null;
+const view=t=>({id:t.id.primaryKey,tagIds:t.tags.map(x=>x.id?x.id.primaryKey:null),added:iso(t.added),modified:iso(t.modified),planned:iso(t.plannedDate),effectiveDue:iso(t.effectiveDueDate),effectiveDefer:iso(t.effectiveDeferDate),repetitionRule:t.repetitionRule?t.repetitionRule.ruleString:null,repetitionMethod:t.repetitionRule?(t.repetitionRule.scheduleType===Task.RepetitionScheduleType.Regularly?'fixed':t.repetitionRule.anchorDateKey===Task.AnchorDateKey.DeferDate?'start-after-completion':'due-after-completion'):null,repetitionScheduleType:t.repetitionRule?(t.repetitionRule.scheduleType===Task.RepetitionScheduleType.Regularly?'from-assigned':'from-completion'):null,repetitionAnchorDate:t.repetitionRule?(t.repetitionRule.anchorDateKey===Task.AnchorDateKey.DeferDate?'dateToStart':t.repetitionRule.anchorDateKey===Task.AnchorDateKey.PlannedDate?'datePlanned':'dateDue'):null,catchUpAutomatically:t.repetitionRule?!!t.repetitionRule.catchUpAutomatically:false,order:t.sequential?'sequential':'parallel',completedByChildren:!!t.completedByChildren,childrenCount:t.children?t.children.length:0,projectStatus:projectLifecycle(t),projectAllowsExecution:projectAllowsExecution(t),statusScope:t.containingProject&&t.containingProject.task===t?'project-root-task':'action',statusInterpretation:t.containingProject&&t.containingProject.task===t?'ofStatus/available describe the project root TASK only. Blocked here does not mean the project is paused; use projectStatus for project lifecycle and the target child available for execution.':'ofStatus/available describe this action; AFK, HITL, ownership and authorization checks are separate',name:t.name,note:t.note||'',tags:t.tags.map(x=>x.name),tagNames:t.tags.map(x=>x.name),projectName:t.containingProject?t.containingProject.name:null,estimatedMinutes:t.estimatedMinutes,inInbox:t.inInbox,status:inactive(t)||'active',completed:inactive(t)==='completed',dropped:inactive(t)==='dropped',isProject:!!(t.containingProject&&t.containingProject.task===t),project:t.containingProject?t.containingProject.name:null,parentId:t.parent?t.parent.id.primaryKey:null,defer:t.deferDate?t.deferDate.toISOString():null,due:t.dueDate?t.dueDate.toISOString():null,flagged:t.flagged,available:isAvailable(t),ofStatus:nativeStatus(t),statusSource:'omnifocus',completionDate:t.completionDate?t.completionDate.toISOString():null});
 `;
-export async function evaluate(code:string){
- const file=path.join(os.tmpdir(),'of-agent-'+crypto.randomUUID()+'.js');
- const script=`const app=Application('OmniFocus');app.evaluateJavascript(${JSON.stringify('{'+helpers+code+'}')});`;
- await fs.writeFile(file,script,{mode:0o600});
- try{const {stdout}=await exec('/usr/bin/osascript',['-l','JavaScript',file],{timeout:20000,maxBuffer:32*1024*1024});return JSON.parse(stdout.trim());}finally{await fs.unlink(file).catch(()=>{});}
+/** Hard-disabled: no child process, app launch, permission prompt, or fallback. */
+export async function evaluate(_code:string):Promise<any>{
+ throw Error('AppleScript/JXA/osascript automation is disabled. Local automation writes and native-only features are unavailable; reads use the local database.');
 }
-export async function getLiveTask(id:string){return evaluate(`const t=flattenedTasks.find(t=>t.id.primaryKey===${JSON.stringify(id)});if(!t)throw Error('Action not found');JSON.stringify(view(t));`);}
-export async function getTask(id:string){const t=(await localViews()).find(t=>t.id===id);if(!t)throw Error('Action not found');return t;}
+export async function getLiveTask(id:string){return databaseTask(id);}
+export async function getTask(id:string,attachmentOffset=0,attachmentLimit=20){return databaseTask(id,attachmentOffset,attachmentLimit);}
 export function listScript(args:any){
  const a={...args,limit:args.limit??50,offset:args.offset??0};
  if(a.done!==undefined){const m=/^--done([1-9][0-9]*)$/.exec(a.done);if(!m)throw Error('Use --doneN, for example --done7');if(a.doneDays!==undefined&&a.doneDays!==Number(m[1]))throw Error('Conflicting done windows');a.doneDays=Number(m[1]);}
@@ -32,35 +35,26 @@ export function listScript(args:any){
  if(a.project)rows=rows.filter(t=>t.containingProject&&t.containingProject.name===a.project);
  if(a.tag)rows=rows.filter(t=>t.tags.some(x=>norm(x.name)===norm(a.tag)));
  if(a.search)rows=rows.filter(t=>(t.name+' '+t.note).toLowerCase().includes(a.search.toLowerCase()));
- if(a.filter==='available')rows=rows.filter(t=>t.taskStatus===Task.Status.Available);
+ if(a.filter==='available')rows=rows.filter(t=>isAvailable(t));
  if(a.filter==='flagged')rows=rows.filter(t=>t.flagged);
  if(a.filter==='inbox')rows=rows.filter(t=>t.inInbox);
- if(a.filter==='due_soon')rows=rows.filter(t=>t.dueDate&&t.dueDate.getTime()<=now+(a.dueWithinDays??7)*86400000);
+ if(a.filter==='due_soon')rows=rows.filter(t=>(t.effectiveDueDate||t.dueDate)&&(t.effectiveDueDate||t.dueDate).getTime()<=now+(a.dueWithinDays??7)*86400000);
  rows.sort((x,y)=>(a.doneDays?y.completionDate.getTime()-x.completionDate.getTime():0)||x.id.primaryKey.localeCompare(y.id.primaryKey));
- const total=rows.length;const tasks=rows.slice(a.offset,a.offset+a.limit).map(t=>({id:t.id.primaryKey,name:t.name,tags:t.tags.map(x=>x.name),project:t.containingProject?t.containingProject.name:null,completed:!!t.completed,completionDate:t.completionDate?t.completionDate.toISOString():null,flagged:!!t.flagged,due:t.dueDate?t.dueDate.toISOString():null}));
- JSON.stringify({count:tasks.length,total,limit:a.limit,offset:a.offset,hasMore:a.offset+tasks.length<total,nextOffset:a.offset+tasks.length<total?a.offset+tasks.length:null,tasks,backend:'local'});`;
+ const total=rows.length;const tasks=rows.slice(a.offset,a.offset+a.limit).map(t=>({id:t.id.primaryKey,name:t.name,tags:t.tags.map(x=>x.name),project:t.containingProject?t.containingProject.name:null,completed:!!t.completed,ofStatus:nativeStatus(t),available:isAvailable(t),statusSource:'omnifocus',completionDate:t.completionDate?t.completionDate.toISOString():null,flagged:!!t.flagged,effectiveDue:t.effectiveDueDate?t.effectiveDueDate.toISOString():null,due:t.dueDate?t.dueDate.toISOString():null}));
+ JSON.stringify({count:tasks.length,total,limit:a.limit,offset:a.offset,hasMore:a.offset+tasks.length<total,nextOffset:a.offset+tasks.length<total?a.offset+tasks.length:null,tasks,backend:'local',runtimeRevision:'2026-11-03-audit-2'});`;
 }
-export async function listTasks(args:any){
- listScript(args);const days=args.doneDays??(args.done?Number(args.done.slice(6)):0),now=Date.now();
- let rows=(await localViews()).filter(t=>!t.isProject&&!t.dropped&&(days?t.completed&&t.completionDate&&Date.parse(t.completionDate)>=now-days*86400000&&Date.parse(t.completionDate)<=now:!t.completed));
- const norm=(n:string)=>n.replace(/^[^\p{L}\p{N}]+/u,'').trim();
- if(args.project)rows=rows.filter(t=>t.project===args.project);
- if(args.tag)rows=rows.filter(t=>t.tags.some(n=>norm(n)===norm(args.tag)));
- if(args.search)rows=rows.filter(t=>(t.name+' '+t.note).toLowerCase().includes(args.search.toLowerCase()));
- if(args.filter==='flagged')rows=rows.filter(t=>t.flagged);
- if(args.filter==='inbox')rows=rows.filter(t=>t.inInbox);
- if(args.filter==='due_soon')rows=rows.filter(t=>t.due&&Date.parse(t.due)<=now+(args.dueWithinDays??7)*86400000);
- if(args.filter==='available'){const ids=new Set(await evaluate("JSON.stringify(flattenedTasks.filter(t=>t.taskStatus===Task.Status.Available).map(t=>t.id.primaryKey));"));rows=rows.filter(t=>ids.has(t.id));}
- rows.sort((a,b)=>(days?Date.parse(b.completionDate!)-Date.parse(a.completionDate!):0)||a.id.localeCompare(b.id));
- const offset=args.offset??0,limit=args.limit??50,total=rows.length;
- const tasks=rows.slice(offset,offset+limit).map(t=>({id:t.id,name:t.name,tags:t.tags,project:t.project,completed:t.completed,completionDate:t.completionDate,flagged:t.flagged,due:t.due}));
- return {tasks,count:tasks.length,total,offset,limit,hasMore:offset+tasks.length<total,nextOffset:offset+tasks.length<total?offset+tasks.length:null,backend:'local-database'};
-}
-export async function sync(){const db=await readLocalDatabase();return {tasks:db.tasks.size,tags:db.tags.size,backend:'local-database'};}
-export function transitionScript(input:any,previous:any,expected:any,validateOnly=false){return `
+// Read the local transaction database without launching OmniFocus.
+export async function listTasks(args:any){return databaseTaskList(args);}
+export async function sync(){const db=await readLocalDatabase();return {tasks:db.tasks.size,tags:db.tags.size,backend:currentBackend()+'-database'};}
+export function transitionScript(input:any,previous:any,expected:any,validateOnly=false){const renderedReason=input.event==='start'?'':previous?.runId===input.runId&&previous?.event===input.event?(input.reason||'').trim():handoffReason(input.reason||'',input);return `
 const a=${JSON.stringify(input)},previous=${JSON.stringify(previous||null)},expected=${JSON.stringify(expected)};
 const task=flattenedTasks.find(t=>t.id.primaryKey===a.id);if(!task)throw Error('Action not found');
-const current=view(task);if(current.isProject||current.completed||current.dropped)throw Error('An active Action is required');
+const current=view(task);
+if(previous&&previous.runId===a.runId&&previous.event===a.event&&a.event!=='start'){
+if(typeof previous.reason!=='string'||previous.reason.trim()!==a.reason.trim())throw Error('Confirmed event payload differs; cannot change handoff reason');
+JSON.stringify(${validateOnly}?{validated:true}:{ok:true,id:a.id,event:a.event,tags:current.tags,completed:current.completed,backend:'local',replayed:true});
+}else{
+if(current.isProject||current.completed||current.dropped)throw Error('An active Action is required');
 if(current.note!==expected.note||JSON.stringify(current.tags)!==JSON.stringify(expected.tags))throw Error('Action changed during transition; retry same runId');
 const tags=current.tags.map(norm);if(!tags.includes('AFK'))throw Error('Action must have AFK tag');
 if(a.event==='start'){if(tags.includes('HITL'))throw Error('Human handoff is pending; human must remove HITL before reassigning');if(!current.available)throw Error('Action is not available for execution');if(previous&&previous.runId===a.runId&&previous.event!=='start')throw Error('Run already ended');if(previous&&previous.runId===a.runId&&previous.event==='start'&&!tags.includes('进行中'))throw Error('Progress was removed; refusing to restart this run');if(tags.includes('进行中')&&(!previous||previous.runId!==a.runId))throw Error('Action is already owned; refusing takeover');}
@@ -72,35 +66,15 @@ if(flattenedTags.filter(t=>norm(t.name)===remove).length>1)throw Error('Ambiguou
 if(${validateOnly}){JSON.stringify({validated:true});}else{
 for(const entry of resolved)task.addTag(entry.tag||new Tag(entry.name));
 for(const t of [...task.tags])if(norm(t.name)===remove)task.removeTag(t);
-if(a.event!=='start'){const handoff=(a.event==='done'?'交付：':'需要你处理：')+a.reason.trim();if(!(task.note||'').endsWith(handoff))task.note=(task.note?task.note+'\\n\\n':'')+handoff;}
+if(a.event!=='start'){const handoff=(a.event==='done'?'交付：':'需要你处理：')+${JSON.stringify(renderedReason)};if(!(task.note||'').endsWith(handoff))task.note=(task.note?task.note+'\\n\\n':'')+handoff;}
 const after=view(task);if(!add.every(n=>after.tags.map(norm).includes(n))||after.tags.map(norm).includes(remove))throw Error('Local transition verification failed');
 JSON.stringify({ok:true,id:a.id,event:a.event,tags:after.tags,completed:after.completed,backend:'local'});}
+}
 `;}
 async function atomic(file:string,data:any){const tmp=file+'.'+process.pid+'.tmp';await fs.writeFile(tmp,JSON.stringify(data),{mode:0o600});await fs.rename(tmp,file);}
 export async function transition(input:any){
- if(/^(1|true|yes)$/i.test(process.env.OMNIFOCUS_READ_ONLY??''))throw Error('Server is read-only');
- if(!input.runId?.trim()||input.runId.length>160||!['start','done','needs_human'].includes(input.event)||!input.id)throw Error('Invalid transition');
- if(input.event!=='start'&&!input.reason?.trim())throw Error('Handoff reason required');
- await fs.mkdir(state,{recursive:true,mode:0o700});
- const lock=path.join(state,'transition-'+crypto.createHash('sha256').update(input.id).digest('hex')+'.lock');
- // Exclusive task lock. Stale locks are retained for explicit inspection rather than unsafe takeover.
- const handle=await fs.open(lock,'wx',0o600);await handle.writeFile(JSON.stringify({pid:process.pid,at:new Date().toISOString()}));await handle.close();
- try{
-  const dirs=['local-ownership','pending'];for(const d of dirs)await fs.mkdir(path.join(state,d),{recursive:true,mode:0o700});
-  const key=crypto.createHash('sha256').update(input.id).digest('hex');const ownerFile=path.join(state,'local-ownership',key+'.json'),pending=path.join(state,'pending',key+'.json');
-  let owner:any;try{owner=JSON.parse(await fs.readFile(ownerFile,'utf8'));}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
-  const task=await getLiveTask(input.id);
-  let intent:any;try{intent=JSON.parse(await fs.readFile(ownerFile+'.intent','utf8'));}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
-  if(intent&&(intent.input.runId!==input.runId||intent.input.event!==input.event||intent.input.reason!==input.reason))throw Error('A prior local transition needs recovery with its original request');
-  // Import existing local ownership records by exact Action ID, without a sync-server read.
-  if(!owner){const dir=path.join(state,'ownership');const files=await fs.readdir(dir).catch(()=>[]);const candidates=[];for(const f of files){const r=JSON.parse(await fs.readFile(path.join(dir,f),'utf8'));if(r.events?.some((e:any)=>e.id===input.id))candidates.push(r.latest);}if(candidates.length>1)throw Error('Multiple ownership records require review');owner=candidates[0];}
-  if(!owner){const records=[...task.note.matchAll(/\[of-agent:([A-Za-z0-9_-]+)\]/g)];if(records.length)owner=JSON.parse(Buffer.from(records.at(-1)![1],'base64url').toString());}
-  // Validate ownership before recording intent. The intent authorizes only this exact retry.
-  if(intent)throw Error('Previous write outcome uncertain; automatic replay disabled to preserve human edits');
-  else {await evaluate(transitionScript(input,owner,task,true));await atomic(ownerFile+'.intent',{before:task,input,previous:input.event==='start'?{runId:input.runId,event:'start'}:owner});}
-  await atomic(pending,{...input,backend:'local',requestedAt:new Date().toISOString()});
-  const result=await evaluate(transitionScript(input,owner,task));
-  await atomic(ownerFile,{id:input.id,runId:input.runId,event:input.event,at:new Date().toISOString(),reason:input.reason||''});
-  await fs.unlink(pending);await fs.unlink(ownerFile+'.intent');return result;
- }catch(e){const intent=path.join(state,'local-ownership',crypto.createHash('sha256').update(input.id).digest('hex')+'.json.intent');const uncertain=await fs.access(intent).then(()=>true,()=>false);return {ok:false,id:input.id,event:input.event,status:uncertain?'uncertain':'rejected',error:String(e)};}finally{await fs.unlink(lock);}
+ // Protocol gate: old callers cannot overwrite v2 ownership after cutover.
+ if(input.protocolVersion!==2)throw Error('Ownership protocol v2 required; upgrade all hosts before cutover');
+ const {transitionV2}=await import('./ledger/runtime.js');
+ return transitionV2(input);
 }

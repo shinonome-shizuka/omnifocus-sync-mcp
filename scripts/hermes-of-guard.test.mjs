@@ -1,5 +1,6 @@
+import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import assert from 'node:assert/strict';
-const dir=fs.mkdtempSync(path.join(os.tmpdir(),'hermes-of-test-'));const script='/Users/maira_yuki_/dev/omnifocus-sync-mcp-fork/scripts/hermes-of-guard.mjs';
+const dir=fs.mkdtempSync(path.join(os.tmpdir(),'hermes-of-test-'));const script=fileURLToPath(new URL('./hermes-of-guard.mjs',import.meta.url));
 function call(p){const r=spawnSync(process.execPath,[script],{input:JSON.stringify(p),encoding:'utf8',env:{...process.env,OF_AGENT_STATE_DIR:dir},timeout:25000});assert.ok(r.stdout,r.stderr);return JSON.parse(r.stdout);}
 const base={session_id:'test',tool_name:'mcp_of_agent_transition',tool_input:{id:'fake',event:'start',runId:'test'}};
 assert.equal(call({hook_event_name:'pre_tool_call',tool_name:'terminal'}).action,'block');

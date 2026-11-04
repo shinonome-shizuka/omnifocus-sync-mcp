@@ -9,3 +9,6 @@ dist/
 dump/
 scratch/
 .gitnexus
+
+.runtime-build-*/
+dist-staged/
