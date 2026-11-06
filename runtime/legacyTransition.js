@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import {scheduledClaim} from './plannedDispatch.js';
 import {getLiveTask} from './localWorkflow.js';
 import {validateLegacyTransition,writeWorkflow} from './workflowWrites.js';
 import {handoffReason} from './handoffLink.js';
@@ -35,6 +36,7 @@ export async function transition(input) {
                 throw e;
         }
         const task = await getLiveTask(input.id);
+        const scheduled = await scheduledClaim(state, input, task);
         let intent;
         try {
             intent = JSON.parse(await fs.readFile(ownerFile + '.intent', 'utf8'));
@@ -68,12 +70,13 @@ export async function transition(input) {
         if (intent)
             throw Error('Previous write outcome uncertain; automatic replay disabled to preserve human edits');
         else {
+            if (scheduled && owner && !['done','needs_human','checked'].includes(owner.event)) throw Error('Scheduled Action already owned');
             const replay=validateLegacyTransition(input,owner,task);
             if(replay)return replay;
             await atomic(ownerFile + '.intent', { recoveryVersion: 1, before: task, input, previousOwner: owner ?? null });
         }
         await atomic(pending, { ...input, backend: 'local', requestedAt: new Date().toISOString() });
-        const result = await writeWorkflow(input.id,input.event,task,input.event==='start'?undefined:handoffReason(input.reason,input));
+        const result = await writeWorkflow(input.id,input.event,scheduled ? {...task, scheduled} : task,input.event==='start'?undefined:handoffReason(input.reason,input));
         await atomic(ownerFile, { id: input.id, runId: input.runId, event: input.event, at: new Date().toISOString(), reason: input.reason || '' });
         await fs.unlink(pending);
         await fs.unlink(ownerFile + '.intent');

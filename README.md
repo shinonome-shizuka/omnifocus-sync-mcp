@@ -219,3 +219,18 @@ of_set_task_status 丢弃默认 allOccurrences:false，仅丢弃当前重复实�
 AFK/Hook 接线、显式恢复与真实验证边界见 [afk-hooks-verification](docs/afk-hooks-verification.md)。
 
 历史实现记录见 [v2 切换边界](docs/ownership-ledger-v2-implementation.md) 和 [2026-11-03 审计](docs/mcp-audit-fixes.md)。这些记录不代表 v2 已上线；当前状态以统一入口和 AFK Hooks 验证文档为准。
+
+### 按计划日期派发普通 AFK Action
+
+构建两个仓库并重连生产 MCP 后，在 fork 目录运行。用 `of_list_projects` 的项目 ID 指定授权范围。先预览，再显式启用该项目，可在不同终端预览运行中的项目。
+
+```sh
+node dist/plannedScheduler.js --project PROJECT_ID
+node dist/plannedScheduler.js --project PROJECT_ID --run --watch -- codex exec -
+```
+
+第一次启用会记录项目的启用时刻。计划日期早于或等于该时刻的 Action 显示 `before-activation`。预览不会建立这条记录。之后按 Action 自身的计划日期和时间扫描，包括嵌套动作。未来的计划、被阻塞的动作、等待、HITL、已有归属或未确认写入均有对应原因。每轮按 P0 到 P3、无优先级处理。前置条件解除或机器唤醒后，下次扫描可以领取已到点的动作。
+
+`--watch` 在本机前台循环，完成本轮后等待 60 秒。Ctrl-C 停止调度。省略 `--watch` 仅运行一轮。worker 可替换为能从标准输入接收指令、并连接同一台 Mac 上统一 MCP 的程序。调度器和 MCP 须共用同一个 `OF_AGENT_STATE_DIR` 和本机 OF 数据库。使用更新后的 CLI 和 MCP，保证领取时核对最新计划日期与项目归属。
+
+每个 Action 和计划时间组合只派发一次。派发记录保存在状态目录的 `planned-dispatch/`。领取、交付沿用普通 AFK 生命周期。预览中的 `dispatched` 表示已预留派发，`needs-inspection` 表示 worker 退出后缺少确切交付证据。此时按 Action ID 和 runId 核对归属、任务及 intent，遇到不确定写入按 [恢复说明](docs/afk-hooks-verification.md) 处理。重新运行调度器会保留去重记录。

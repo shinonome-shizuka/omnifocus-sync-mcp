@@ -134,3 +134,5 @@ To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
+
+Ordinary planned AFK dispatch uses the project-scoped `plannedScheduler` executable. Keep its first-enable cutoff, persistent per-occurrence receipts, native SQLite eligibility, and final application-side date/project checks together. It uses the legacy ordinary lifecycle and shares its per-Action lock. Run scheduler tests against temporary state. Keep waiting monitors on their separate protocol.
